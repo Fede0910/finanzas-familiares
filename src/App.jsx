@@ -35,7 +35,7 @@ function convertFromArs(amountArs, currency, rate) {
   return Number(amountArs || 0);
 }
 
-function formatByDisplayCurrency(amountArs, displayCurrency, blueRate) {
+function formatDisplay(amountArs, displayCurrency, blueRate) {
   const shown = convertFromArs(amountArs, displayCurrency, blueRate);
   return money(shown, displayCurrency);
 }
@@ -58,15 +58,15 @@ export default function App() {
   const today = new Date().toISOString().slice(0, 10);
   const currentMonth = new Date().toISOString().slice(0, 7);
 
-  const [tab, setTab] = useState("cargar");
+  const [activeTab, setActiveTab] = useState("cargar");
   const [displayCurrency, setDisplayCurrency] = useState("ARS");
   const [blueRate, setBlueRate] = useState(1250);
   const [blueUpdatedAt, setBlueUpdatedAt] = useState("");
   const [fxStatus, setFxStatus] = useState("idle");
 
   const [movements, setMovements] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [loadingMovements, setLoadingMovements] = useState(true);
+  const [savingMovement, setSavingMovement] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
 
   const [movementForm, setMovementForm] = useState(emptyMovement(today, 1250));
@@ -83,7 +83,7 @@ export default function App() {
       try {
         setFxStatus("loading");
         const res = await fetch("https://dolarapi.com/v1/dolares/blue");
-        if (!res.ok) throw new Error("No se pudo consultar la cotización");
+        if (!res.ok) throw new Error();
         const data = await res.json();
         const rate = Number(data?.venta || 0);
         if (rate > 0) {
@@ -101,36 +101,37 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    async function loadMovements() {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from("movements")
-        .select("*")
-        .order("movement_date", { ascending: false })
-        .order("id", { ascending: false });
-
-      if (!error && data) {
-        setMovements(
-          data.map((row) => ({
-            id: row.id,
-            date: row.movement_date,
-            person: row.person,
-            type: row.type,
-            category: row.category,
-            description: row.description || "",
-            originalAmount: Number(row.original_amount || 0),
-            currency: row.original_currency || "ARS",
-            fxRate: Number(row.fx_rate || 1),
-            amountArs: Number(row.amount_ars || 0),
-            amountUsd: Number(row.amount_usd || 0),
-            paymentMethod: row.payment_method || "",
-          }))
-        );
-      }
-      setLoading(false);
-    }
     loadMovements();
   }, []);
+
+  async function loadMovements() {
+    setLoadingMovements(True if False else True)
+    const { data, error } = await supabase
+      .from("movements")
+      .select("*")
+      .order("movement_date", { ascending: false })
+      .order("id", { ascending: false });
+
+    if (!error && data) {
+      setMovements(
+        data.map((row) => ({
+          id: row.id,
+          date: row.movement_date,
+          person: row.person,
+          type: row.type,
+          category: row.category,
+          description: row.description || "",
+          originalAmount: Number(row.original_amount || 0),
+          currency: row.original_currency || "ARS",
+          fxRate: Number(row.fx_rate || 1),
+          amountArs: Number(row.amount_ars || 0),
+          amountUsd: Number(row.amount_usd || 0),
+          paymentMethod: row.payment_method || "",
+        }))
+      );
+    }
+    setLoadingMovements(false);
+  }
 
   const categoriesForType = movementForm.type ? CATEGORY_MAP[movementForm.type] || [] : [];
 
@@ -159,16 +160,16 @@ export default function App() {
     });
   }, [movements, filters]);
 
-  const categoryTotals = useMemo(() => {
-    const map = {};
+  const dashboardByCategory = useMemo(() => {
+    const rows = {};
     filteredMovements
       .filter((m) => m.type === "Egreso")
       .forEach((m) => {
-        map[m.category] = (map[m.category] || 0) + m.amountArs;
+        rows[m.category] = (rows[m.category] || 0) + m.amountArs;
       });
 
-    const total = Object.values(map).reduce((a, b) => a + b, 0);
-    return Object.entries(map)
+    const total = Object.values(rows).reduce((a, b) => a + b, 0);
+    return Object.entries(rows)
       .map(([category, amountArs]) => ({
         category,
         amountArs,
@@ -177,10 +178,10 @@ export default function App() {
       .sort((a, b) => b.amountArs - a.amountArs);
   }, [filteredMovements]);
 
-  const addMovement = async () => {
+  async function handleSaveMovement() {
     if (!movementForm.type || !movementForm.category || !movementForm.originalAmount) return;
 
-    setSaving(true);
+    setSavingMovement(true);
     setSaveMessage("");
 
     const resolvedRate = movementForm.currency === "USD" ? Number(blueRate || 1) : 1;
@@ -212,7 +213,7 @@ export default function App() {
 
     if (error) {
       setSaveMessage("No se pudo guardar en Supabase.");
-      setSaving(false);
+      setSavingMovement(false);
       return;
     }
 
@@ -236,21 +237,30 @@ export default function App() {
 
     setMovementForm(emptyMovement(today, blueRate));
     setSaveMessage("Guardado en Supabase.");
-    setSaving(false);
-    setTab("datos");
-  };
+    setSavingMovement(false);
+  }
+
+  const tabs = [
+    ["cargar", "Cargar"],
+    ["dashboard", "Dashboard"],
+    ["datos", "Datos"],
+    ["presupuesto", "Presupuesto"],
+    ["deudas", "Deudas"],
+    ["metas", "Metas"],
+    ["config", "Config."],
+  ];
 
   return (
     <div className="app-shell">
-      <div className="app-wrap">
-        <header className="hero">
+      <div className="app-container">
+        <header className="topbar">
           <div>
             <h1>Finanzas Familiares</h1>
-            <p>Ahora con guardado real en Supabase. El próximo paso será sumar tabla completa, exportación y deudas conectadas.</p>
+            <p>Bloque 1: base linda nuevamente, manteniendo guardado real en Supabase.</p>
           </div>
-          <div className="hero-actions">
+          <div className="topbar-actions">
             <select
-              className="control"
+              className="control compact"
               value={displayCurrency}
               onChange={(e) => setDisplayCurrency(e.target.value)}
             >
@@ -260,178 +270,127 @@ export default function App() {
           </div>
         </header>
 
-        <section className="status-strip">
-          <div className="status-card">
-            <span className="status-label">Cotización USD blue</span>
+        <div className="summary-strip">
+          <div className="summary-card">
+            <span className="label">Cotización USD blue</span>
             <strong>{money(blueRate, "ARS")}</strong>
           </div>
-          <div className="status-card">
-            <span className="status-label">Estado</span>
-            <strong>
-              {fxStatus === "success" ? "Cotización cargada" : fxStatus === "loading" ? "Actualizando..." : "Valor manual"}
-            </strong>
+          <div className="summary-card">
+            <span className="label">Estado</span>
+            <strong>{fxStatus === "success" ? "Cotización cargada" : fxStatus === "loading" ? "Actualizando..." : "Valor manual"}</strong>
           </div>
-          <div className="status-card status-wide">
-            <span className="status-label">Última actualización</span>
+          <div className="summary-card wide">
+            <span className="label">Última actualización</span>
             <strong>{blueUpdatedAt ? new Date(blueUpdatedAt).toLocaleString("es-AR") : "-"}</strong>
           </div>
-        </section>
+        </div>
 
-        <nav className="tabs">
-          {[
-            ["cargar", "Cargar"],
-            ["dashboard", "Dashboard"],
-            ["datos", "Datos"],
-          ].map(([value, label]) => (
+        <nav className="tabbar">
+          {tabs.map(([value, label]) => (
             <button
               key={value}
-              className={`tab-btn ${tab === value ? "active" : ""}`}
-              onClick={() => setTab(value)}
+              className={`tab ${activeTab === value ? "active" : ""}`}
+              onClick={() => setActiveTab(value)}
             >
               {label}
             </button>
           ))}
         </nav>
 
-        {tab === "cargar" && (
+        {activeTab === "cargar" && (
           <section className="panel">
             <div className="panel-header">
               <h2>Carga rápida</h2>
-              <span className="pill">Mobile first</span>
+              <span className="badge">Mobile first</span>
             </div>
 
-            <div className="form-grid">
+            <div className="grid-form">
               <Field label="Fecha">
-                <input
-                  className="control"
-                  type="date"
-                  value={movementForm.date}
-                  onChange={(e) => setMovementForm({ ...movementForm, date: e.target.value })}
-                />
+                <input className="control" type="date" value={movementForm.date} onChange={(e) => setMovementForm({ ...movementForm, date: e.target.value })} />
               </Field>
 
               <Field label="Persona">
-                <select
-                  className="control"
-                  value={movementForm.person}
-                  onChange={(e) => setMovementForm({ ...movementForm, person: e.target.value })}
-                >
-                  {PEOPLE.map((p) => (
-                    <option key={p} value={p}>{p}</option>
-                  ))}
+                <select className="control" value={movementForm.person} onChange={(e) => setMovementForm({ ...movementForm, person: e.target.value })}>
+                  {PEOPLE.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
               </Field>
 
               <Field label="Tipo">
-                <select
-                  className="control"
-                  value={movementForm.type}
-                  onChange={(e) => setMovementForm({ ...movementForm, type: e.target.value, category: "" })}
-                >
+                <select className="control" value={movementForm.type} onChange={(e) => setMovementForm({ ...movementForm, type: e.target.value, category: "" })}>
                   <option value="">Seleccionar</option>
-                  {TYPES.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
+                  {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>
               </Field>
 
               <Field label="Categoría">
-                <select
-                  className="control"
-                  value={movementForm.category}
-                  onChange={(e) => setMovementForm({ ...movementForm, category: e.target.value })}
-                  disabled={!movementForm.type}
-                >
+                <select className="control" value={movementForm.category} onChange={(e) => setMovementForm({ ...movementForm, category: e.target.value })} disabled={!movementForm.type}>
                   <option value="">Seleccionar</option>
-                  {categoriesForType.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
+                  {categoriesForType.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </Field>
 
               <Field label="Moneda">
-                <select
-                  className="control"
-                  value={movementForm.currency}
-                  onChange={(e) => setMovementForm({ ...movementForm, currency: e.target.value })}
-                >
+                <select className="control" value={movementForm.currency} onChange={(e) => setMovementForm({ ...movementForm, currency: e.target.value })}>
                   <option value="ARS">Pesos</option>
                   <option value="USD">Dólar blue</option>
                 </select>
               </Field>
 
               <Field label="Importe original">
-                <input
-                  className="control"
-                  type="number"
-                  value={movementForm.originalAmount}
-                  onChange={(e) => setMovementForm({ ...movementForm, originalAmount: e.target.value })}
-                  placeholder="0"
-                />
+                <input className="control" type="number" value={movementForm.originalAmount} onChange={(e) => setMovementForm({ ...movementForm, originalAmount: e.target.value })} placeholder="0" />
               </Field>
 
               <Field label="Medio de pago">
-                <select
-                  className="control"
-                  value={movementForm.paymentMethod}
-                  onChange={(e) => setMovementForm({ ...movementForm, paymentMethod: e.target.value })}
-                >
-                  {PAYMENT_METHODS.map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
+                <select className="control" value={movementForm.paymentMethod} onChange={(e) => setMovementForm({ ...movementForm, paymentMethod: e.target.value })}>
+                  {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
               </Field>
 
               <Field label="Descripción">
-                <input
-                  className="control"
-                  value={movementForm.description}
-                  onChange={(e) => setMovementForm({ ...movementForm, description: e.target.value })}
-                  placeholder="Detalle opcional"
-                />
+                <input className="control" value={movementForm.description} onChange={(e) => setMovementForm({ ...movementForm, description: e.target.value })} placeholder="Detalle opcional" />
               </Field>
             </div>
 
             <div className="info-box">
-              Los movimientos ya se guardan en Supabase. El USD todavía usa cotización actual; después lo cambiamos a cotización histórica por fecha.
+              Los movimientos ya se guardan en Supabase. El dólar todavía usa cotización actual; en el bloque siguiente lo cambiamos a histórico por fecha.
             </div>
 
-            <button className="primary-btn" onClick={addMovement} disabled={saving}>
-              {saving ? "Guardando..." : "Agregar movimiento"}
+            <button className="primary-btn" onClick={handleSaveMovement} disabled={savingMovement}>
+              {savingMovement ? "Guardando..." : "Agregar movimiento"}
             </button>
 
             {saveMessage && <div className="save-message">{saveMessage}</div>}
           </section>
         )}
 
-        {tab === "dashboard" && (
+        {activeTab === "dashboard" && (
           <>
             <section className="stats-grid">
-              <Stat title="Ingresos" value={formatByDisplayCurrency(summary.income, displayCurrency, blueRate)} />
-              <Stat title="Gastos" value={formatByDisplayCurrency(summary.expenses, displayCurrency, blueRate)} />
-              <Stat title="Ahorro" value={formatByDisplayCurrency(summary.savings, displayCurrency, blueRate)} />
-              <Stat title="Inversión" value={formatByDisplayCurrency(summary.investments, displayCurrency, blueRate)} />
-              <Stat title="Neto" value={formatByDisplayCurrency(summary.net, displayCurrency, blueRate)} />
+              <Stat title="Ingresos" value={formatDisplay(summary.income, displayCurrency, blueRate)} />
+              <Stat title="Gastos" value={formatDisplay(summary.expenses, displayCurrency, blueRate)} />
+              <Stat title="Ahorro" value={formatDisplay(summary.savings, displayCurrency, blueRate)} />
+              <Stat title="Inversión" value={formatDisplay(summary.investments, displayCurrency, blueRate)} />
+              <Stat title="Neto" value={formatDisplay(summary.net, displayCurrency, blueRate)} />
             </section>
 
             <section className="panel">
               <div className="panel-header">
-                <h2>Gasto por categoría del mes filtrado</h2>
-                <span className="pill">Importe + %</span>
+                <h2>Gasto por categoría</h2>
+                <span className="badge">Importe + %</span>
               </div>
 
-              {categoryTotals.length === 0 ? (
-                <div className="empty">Todavía no hay egresos para ese filtro.</div>
+              {dashboardByCategory.length === 0 ? (
+                <div className="empty-state">Todavía no hay egresos para este filtro.</div>
               ) : (
-                <div className="bars-wrap">
-                  {categoryTotals.map((row) => (
-                    <div key={row.category} className="bar-row">
-                      <div className="bar-header">
+                <div className="bars-list">
+                  {dashboardByCategory.map((row) => (
+                    <div key={row.category} className="bar-item">
+                      <div className="bar-head">
                         <strong>{row.category}</strong>
-                        <span>{formatByDisplayCurrency(row.amountArs, displayCurrency, blueRate)} · {row.pct.toFixed(1)}%</span>
+                        <span>{formatDisplay(row.amountArs, displayCurrency, blueRate)} · {row.pct.toFixed(1)}%</span>
                       </div>
                       <div className="bar-track">
-                        <div className="bar-fill" style={{ width: `${Math.max(6, row.pct)}%` }} />
+                        <div className="bar-fill" style={{ width: `${Math.max(5, row.pct)}%` }} />
                       </div>
                     </div>
                   ))}
@@ -441,22 +400,17 @@ export default function App() {
           </>
         )}
 
-        {tab === "datos" && (
+        {activeTab === "datos" && (
           <>
             <section className="panel">
               <div className="panel-header">
                 <h2>Filtros</h2>
-                <span className="pill">Datos</span>
+                <span className="badge">Tabla completa</span>
               </div>
 
-              <div className="form-grid filters-grid">
+              <div className="grid-filters">
                 <Field label="Mes">
-                  <input
-                    className="control"
-                    type="month"
-                    value={filters.month}
-                    onChange={(e) => setFilters({ ...filters, month: e.target.value })}
-                  />
+                  <input className="control" type="month" value={filters.month} onChange={(e) => setFilters({ ...filters, month: e.target.value })} />
                 </Field>
 
                 <Field label="Persona">
@@ -492,14 +446,14 @@ export default function App() {
 
             <section className="panel">
               <div className="panel-header">
-                <h2>Movimientos guardados</h2>
-                <span className="pill">{filteredMovements.length} filas</span>
+                <h2>Datos ingresados</h2>
+                <span className="badge">{filteredMovements.length} filas</span>
               </div>
 
-              {loading ? (
-                <div className="empty">Cargando desde Supabase...</div>
+              {loadingMovements ? (
+                <div className="empty-state">Cargando desde Supabase...</div>
               ) : filteredMovements.length === 0 ? (
-                <div className="empty">No hay movimientos para esos filtros.</div>
+                <div className="empty-state">No hay movimientos para esos filtros.</div>
               ) : (
                 <>
                   <div className="table-wrap">
@@ -512,7 +466,7 @@ export default function App() {
                           <th>Categoría</th>
                           <th>Descripción</th>
                           <th>Moneda</th>
-                          <th>Importe original</th>
+                          <th>Original</th>
                           <th>TC</th>
                           <th>ARS</th>
                           <th>USD</th>
@@ -539,16 +493,16 @@ export default function App() {
                     </table>
                   </div>
 
-                  <div className="mobile-cards">
+                  <div className="cards-mobile">
                     {filteredMovements.map((m) => (
                       <article key={m.id} className="movement-card">
-                        <div className="movement-card-top">
+                        <div className="movement-card-head">
                           <strong>{m.category}</strong>
                           <span>{m.type}</span>
                         </div>
-                        <div className="movement-meta">{m.date} · {m.person} · {m.paymentMethod || "-"}</div>
-                        <div className="movement-desc">{m.description || "Sin detalle"}</div>
-                        <div className="movement-values">
+                        <div className="movement-card-sub">{m.date} · {m.person} · {m.paymentMethod || "-"}</div>
+                        <div className="movement-card-desc">{m.description || "Sin detalle"}</div>
+                        <div className="movement-metrics">
                           <div><span>Original</span><strong>{money(m.originalAmount, m.currency)}</strong></div>
                           <div><span>ARS</span><strong>{money(m.amountArs, "ARS")}</strong></div>
                           <div><span>USD</span><strong>{money(m.amountUsd || convertFromArs(m.amountArs, "USD", m.fxRate), "USD")}</strong></div>
@@ -561,6 +515,18 @@ export default function App() {
               )}
             </section>
           </>
+        )}
+
+        {["presupuesto", "deudas", "metas", "config"].includes(activeTab) && (
+          <section className="panel">
+            <div className="panel-header">
+              <h2>{tabs.find((t) => t[0] === activeTab)?.[1]}</h2>
+              <span className="badge">Siguiente bloque</span>
+            </div>
+            <div className="empty-state">
+              Esta pestaña la dejamos estructurada para no perder el rumbo. En el próximo bloque sumamos presupuesto, deudas conectadas, metas y configuración sobre Supabase.
+            </div>
+          </section>
         )}
       </div>
     </div>
