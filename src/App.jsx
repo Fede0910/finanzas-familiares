@@ -1,12 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
-import { Wallet, CreditCard, PiggyBank, Target, TrendingUp, Database, Plus } from "lucide-react";
+import { createRoot } from "react-dom/client";
 import { supabase } from "./lib/supabase";
 
 const initialPeople = ["Federico", "Mica", "Santy", "Compartido"];
@@ -56,14 +49,9 @@ function emptyMovement(today, paymentMethods, people, blueRate) {
   };
 }
 
-export default function App() {
+function App() {
   const today = new Date().toISOString().slice(0, 10);
   const currentMonth = new Date().toISOString().slice(0, 7);
-
-  const [people] = useState(initialPeople);
-  const [paymentMethods] = useState(initialPaymentMethods);
-  const [types] = useState(initialTypes);
-  const [categoryMap] = useState(initialCategoryMap);
 
   const [movements, setMovements] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -72,6 +60,7 @@ export default function App() {
   const [blueRate, setBlueRate] = useState(1250);
   const [displayCurrency, setDisplayCurrency] = useState("ARS");
   const [movementFilters, setMovementFilters] = useState({ person: "all", type: "all", category: "all", month: currentMonth, currency: "all" });
+  const [tab, setTab] = useState("cargar");
 
   const [movementForm, setMovementForm] = useState(
     emptyMovement(today, initialPaymentMethods, initialPeople, 1250)
@@ -85,8 +74,7 @@ export default function App() {
         const data = await res.json();
         const rate = Number(data?.venta || 0);
         if (rate > 0) setBlueRate(rate);
-      } catch {
-      }
+      } catch {}
     }
     fetchBlue();
   }, []);
@@ -101,7 +89,7 @@ export default function App() {
         .order("id", { ascending: false });
 
       if (!error && data) {
-        const mapped = data.map((row) => ({
+        setMovements(data.map((row) => ({
           id: row.id,
           date: row.movement_date,
           person: row.person,
@@ -114,10 +102,7 @@ export default function App() {
           amountArs: Number(row.amount_ars || 0),
           amountUsd: Number(row.amount_usd || 0),
           paymentMethod: row.payment_method || "",
-          linkedDebtId: row.linked_debt_id || "",
-          linkedBudgetId: row.linked_budget_id || "",
-        }));
-        setMovements(mapped);
+        })));
       }
       setLoading(false);
     }
@@ -125,7 +110,7 @@ export default function App() {
     loadMovements();
   }, []);
 
-  const categoriesForMovementType = movementForm.type ? categoryMap[movementForm.type] || [] : [];
+  const categoriesForMovementType = movementForm.type ? initialCategoryMap[movementForm.type] || [] : [];
 
   const formatAmount = (amountArs) => {
     const shown = convertFromArs(amountArs, displayCurrency, blueRate);
@@ -162,9 +147,7 @@ export default function App() {
     const amountArs = convertToArs(movementForm.originalAmount, movementForm.currency, resolvedRate);
     const amountUsd = movementForm.currency === "USD"
       ? Number(movementForm.originalAmount || 0)
-      : resolvedRate > 0
-        ? amountArs / resolvedRate
-        : 0;
+      : resolvedRate > 0 ? amountArs / resolvedRate : 0;
 
     const payload = {
       movement_date: movementForm.date,
@@ -182,11 +165,7 @@ export default function App() {
       linked_budget_id: null,
     };
 
-    const { data, error } = await supabase
-      .from("movements")
-      .insert(payload)
-      .select()
-      .single();
+    const { data, error } = await supabase.from("movements").insert(payload).select().single();
 
     if (error) {
       setSaveMessage("No se pudo guardar en Supabase.");
@@ -194,7 +173,7 @@ export default function App() {
       return;
     }
 
-    const newMovement = {
+    setMovements((prev) => [{
       id: data.id,
       date: data.movement_date,
       person: data.person,
@@ -207,109 +186,122 @@ export default function App() {
       amountArs: Number(data.amount_ars || 0),
       amountUsd: Number(data.amount_usd || 0),
       paymentMethod: data.payment_method || "",
-      linkedDebtId: data.linked_debt_id || "",
-      linkedBudgetId: data.linked_budget_id || "",
-    };
+    }, ...prev]);
 
-    setMovements((prev) => [newMovement, ...prev]);
-    setMovementForm(emptyMovement(today, paymentMethods, people, blueRate));
+    setMovementForm(emptyMovement(today, initialPaymentMethods, initialPeople, blueRate));
     setSaveMessage("Guardado en Supabase.");
     setSaving(false);
   };
 
+  const cardStyle = {background:"#fff",border:"1px solid #e5e7eb",borderRadius:"16px",padding:"16px"};
+  const inputStyle = {width:"100%",padding:"10px",border:"1px solid #d1d5db",borderRadius:"10px",background:"#fff"};
+  const buttonStyle = {width:"100%",padding:"12px",border:"none",borderRadius:"12px",background:"#111827",color:"#fff",fontWeight:600,cursor:"pointer"};
+
   return (
-    <div className="min-h-screen bg-slate-50 p-3 md:p-6">
-      <div className="mx-auto max-w-7xl space-y-5">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+    <div style={{minHeight:"100vh",background:"#f8fafc",padding:"12px"}}>
+      <div style={{maxWidth:"1100px",margin:"0 auto",display:"grid",gap:"16px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:"12px",flexWrap:"wrap"}}>
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Finanzas Familiares</h1>
-            <p className="text-slate-600 text-sm md:text-base">Movements ya conectados con Supabase.</p>
+            <h1 style={{margin:0,fontSize:"32px"}}>Finanzas Familiares</h1>
+            <div style={{color:"#475569"}}>Movements conectados con Supabase.</div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge className="rounded-full px-3 py-2 text-xs md:text-sm">Persistencia real</Badge>
-            <Select value={displayCurrency} onValueChange={setDisplayCurrency}>
-              <SelectTrigger className="w-[130px] rounded-xl bg-white"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ARS">Ver en ARS</SelectItem>
-                <SelectItem value="USD">Ver en USD</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <select value={displayCurrency} onChange={(e) => setDisplayCurrency(e.target.value)} style={{...inputStyle,width:"160px"}}>
+            <option value="ARS">Ver en ARS</option>
+            <option value="USD">Ver en USD</option>
+          </select>
         </div>
 
-        <Tabs defaultValue="cargar" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-3 rounded-2xl h-auto bg-white shadow-sm">
-            <TabsTrigger value="cargar">Cargar</TabsTrigger>
-            <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
-            <TabsTrigger value="datos">Datos</TabsTrigger>
-          </TabsList>
+        <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+          {["cargar","dashboard","datos"].map((name) => (
+            <button key={name} onClick={() => setTab(name)} style={{padding:"10px 14px",borderRadius:"999px",border:"1px solid #d1d5db",background:tab===name?"#111827":"#fff",color:tab===name?"#fff":"#111827",cursor:"pointer"}}>
+              {name.charAt(0).toUpperCase() + name.slice(1)}
+            </button>
+          ))}
+        </div>
 
-          <TabsContent value="cargar" className="space-y-4">
-            <Card className="rounded-2xl shadow-sm">
-              <CardHeader><CardTitle className="text-xl">Carga rápida</CardTitle></CardHeader>
-              <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <div className="space-y-2"><Label>Fecha</Label><Input type="date" value={movementForm.date} onChange={(e) => setMovementForm({ ...movementForm, date: e.target.value })} /></div>
-                <div className="space-y-2"><Label>Persona</Label><Select value={movementForm.person} onValueChange={(v) => setMovementForm({ ...movementForm, person: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{people.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent></Select></div>
-                <div className="space-y-2"><Label>Tipo</Label><Select value={movementForm.type} onValueChange={(v) => setMovementForm({ ...movementForm, type: v, category: "" })}><SelectTrigger><SelectValue placeholder="Seleccionar" /></SelectTrigger><SelectContent>{types.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent></Select></div>
-                <div className="space-y-2"><Label>Categoría</Label><Select value={movementForm.category} onValueChange={(v) => setMovementForm({ ...movementForm, category: v })} disabled={!movementForm.type}><SelectTrigger><SelectValue placeholder="Seleccionar" /></SelectTrigger><SelectContent>{categoriesForMovementType.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select></div>
-                <div className="space-y-2"><Label>Moneda</Label><Select value={movementForm.currency} onValueChange={(v) => setMovementForm({ ...movementForm, currency: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="ARS">Pesos</SelectItem><SelectItem value="USD">Dólar blue</SelectItem></SelectContent></Select></div>
-                <div className="space-y-2"><Label>Importe original</Label><Input type="number" value={movementForm.originalAmount} onChange={(e) => setMovementForm({ ...movementForm, originalAmount: e.target.value })} placeholder="0" /></div>
-                <div className="space-y-2"><Label>Medio de pago</Label><Select value={movementForm.paymentMethod} onValueChange={(v) => setMovementForm({ ...movementForm, paymentMethod: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{paymentMethods.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}</SelectContent></Select></div>
-                <div className="space-y-2 md:col-span-2 xl:col-span-1"><Label>Descripción</Label><Input value={movementForm.description} onChange={(e) => setMovementForm({ ...movementForm, description: e.target.value })} placeholder="Detalle opcional" /></div>
-                <div className="md:col-span-2 xl:col-span-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">Ahora sí se guarda en Supabase. En el próximo paso conectamos tabla completa, exportación y saldos.</div>
-                <div className="md:col-span-2 xl:col-span-4">
-                  <Button className="w-full rounded-2xl h-11" onClick={addMovement} disabled={saving}>
-                    <Plus className="mr-2 h-4 w-4" /> {saving ? "Guardando..." : "Agregar movimiento"}
-                  </Button>
-                </div>
-                {saveMessage && <div className="md:col-span-2 xl:col-span-4 text-sm font-medium">{saveMessage}</div>}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="dashboard" className="space-y-4">
-            <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
-              <Card className="rounded-2xl shadow-sm"><CardContent className="p-4 md:p-5"><div className="mb-2 flex items-center gap-2 text-slate-500 text-xs md:text-sm"><Wallet className="h-4 w-4" /> Ingresos</div><div className="text-lg md:text-2xl font-semibold">{formatAmount(summary.income)}</div></CardContent></Card>
-              <Card className="rounded-2xl shadow-sm"><CardContent className="p-4 md:p-5"><div className="mb-2 flex items-center gap-2 text-slate-500 text-xs md:text-sm"><CreditCard className="h-4 w-4" /> Gastos</div><div className="text-lg md:text-2xl font-semibold">{formatAmount(summary.expenses)}</div></CardContent></Card>
-              <Card className="rounded-2xl shadow-sm"><CardContent className="p-4 md:p-5"><div className="mb-2 flex items-center gap-2 text-slate-500 text-xs md:text-sm"><PiggyBank className="h-4 w-4" /> Ahorro</div><div className="text-lg md:text-2xl font-semibold">{formatAmount(summary.savings)}</div></CardContent></Card>
-              <Card className="rounded-2xl shadow-sm"><CardContent className="p-4 md:p-5"><div className="mb-2 flex items-center gap-2 text-slate-500 text-xs md:text-sm"><Target className="h-4 w-4" /> Inversión</div><div className="text-lg md:text-2xl font-semibold">{formatAmount(summary.investments)}</div></CardContent></Card>
-              <Card className="rounded-2xl shadow-sm"><CardContent className="p-4 md:p-5"><div className="mb-2 flex items-center gap-2 text-slate-500 text-xs md:text-sm"><TrendingUp className="h-4 w-4" /> Neto</div><div className="text-lg md:text-2xl font-semibold">{formatAmount(summary.net)}</div></CardContent></Card>
+        {tab === "cargar" && (
+          <div style={cardStyle}>
+            <h2 style={{marginTop:0}}>Carga rápida</h2>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"12px"}}>
+              <div><LabelLike>Fecha</LabelLike><input type="date" value={movementForm.date} onChange={(e)=>setMovementForm({...movementForm,date:e.target.value})} style={inputStyle} /></div>
+              <div><LabelLike>Persona</LabelLike><select value={movementForm.person} onChange={(e)=>setMovementForm({...movementForm,person:e.target.value})} style={inputStyle}>{initialPeople.map(p=><option key={p} value={p}>{p}</option>)}</select></div>
+              <div><LabelLike>Tipo</LabelLike><select value={movementForm.type} onChange={(e)=>setMovementForm({...movementForm,type:e.target.value,category:""})} style={inputStyle}><option value="">Seleccionar</option>{initialTypes.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+              <div><LabelLike>Categoría</LabelLike><select value={movementForm.category} onChange={(e)=>setMovementForm({...movementForm,category:e.target.value})} style={inputStyle} disabled={!movementForm.type}><option value="">Seleccionar</option>{categoriesForMovementType.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+              <div><LabelLike>Moneda</LabelLike><select value={movementForm.currency} onChange={(e)=>setMovementForm({...movementForm,currency:e.target.value})} style={inputStyle}><option value="ARS">Pesos</option><option value="USD">Dólar blue</option></select></div>
+              <div><LabelLike>Importe original</LabelLike><input type="number" value={movementForm.originalAmount} onChange={(e)=>setMovementForm({...movementForm,originalAmount:e.target.value})} style={inputStyle} /></div>
+              <div><LabelLike>Medio de pago</LabelLike><select value={movementForm.paymentMethod} onChange={(e)=>setMovementForm({...movementForm,paymentMethod:e.target.value})} style={inputStyle}>{initialPaymentMethods.map(m=><option key={m} value={m}>{m}</option>)}</select></div>
+              <div><LabelLike>Descripción</LabelLike><input value={movementForm.description} onChange={(e)=>setMovementForm({...movementForm,description:e.target.value})} style={inputStyle} /></div>
             </div>
-          </TabsContent>
+            <div style={{marginTop:"12px",padding:"12px",background:"#f8fafc",border:"1px solid #e5e7eb",borderRadius:"12px",fontSize:"14px"}}>
+              Ahora sí se guarda en Supabase.
+            </div>
+            <div style={{marginTop:"12px"}}>
+              <button onClick={addMovement} disabled={saving} style={buttonStyle}>{saving ? "Guardando..." : "Agregar movimiento"}</button>
+            </div>
+            {saveMessage && <div style={{marginTop:"10px",fontWeight:600}}>{saveMessage}</div>}
+          </div>
+        )}
 
-          <TabsContent value="datos" className="space-y-4">
-            <Card className="rounded-2xl shadow-sm">
-              <CardHeader><CardTitle className="text-xl flex items-center gap-2"><Database className="h-5 w-5" /> Datos ingresados</CardTitle></CardHeader>
-              <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-5">
-                <div className="space-y-2"><Label>Mes</Label><Input type="month" value={movementFilters.month} onChange={(e) => setMovementFilters({ ...movementFilters, month: e.target.value })} /></div>
-                <div className="space-y-2"><Label>Persona</Label><Select value={movementFilters.person} onValueChange={(v) => setMovementFilters({ ...movementFilters, person: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todas</SelectItem>{people.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent></Select></div>
-                <div className="space-y-2"><Label>Tipo</Label><Select value={movementFilters.type} onValueChange={(v) => setMovementFilters({ ...movementFilters, type: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todos</SelectItem>{types.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent></Select></div>
-                <div className="space-y-2"><Label>Categoría</Label><Select value={movementFilters.category} onValueChange={(v) => setMovementFilters({ ...movementFilters, category: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todas</SelectItem>{Object.values(categoryMap).flat().map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select></div>
-                <div className="space-y-2"><Label>Moneda</Label><Select value={movementFilters.currency} onValueChange={(v) => setMovementFilters({ ...movementFilters, currency: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todas</SelectItem><SelectItem value="ARS">ARS</SelectItem><SelectItem value="USD">USD</SelectItem></SelectContent></Select></div>
-              </CardContent>
-            </Card>
-            <Card className="rounded-2xl shadow-sm">
-              <CardHeader><CardTitle className="text-xl">Últimos movimientos</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
-                {loading && <div className="text-sm text-slate-500">Cargando desde Supabase...</div>}
-                {!loading && filteredMovements.map((m) => (
-                  <div key={m.id} className="flex flex-col gap-3 rounded-2xl border bg-white p-4 md:flex-row md:items-center md:justify-between">
+        {tab === "dashboard" && (
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"12px"}}>
+            <StatCard title="Ingresos" value={formatAmount(summary.income)} />
+            <StatCard title="Gastos" value={formatAmount(summary.expenses)} />
+            <StatCard title="Ahorro" value={formatAmount(summary.savings)} />
+            <StatCard title="Inversión" value={formatAmount(summary.investments)} />
+            <StatCard title="Neto" value={formatAmount(summary.net)} />
+          </div>
+        )}
+
+        {tab === "datos" && (
+          <>
+            <div style={cardStyle}>
+              <h2 style={{marginTop:0}}>Filtros</h2>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"12px"}}>
+                <div><LabelLike>Mes</LabelLike><input type="month" value={movementFilters.month} onChange={(e)=>setMovementFilters({...movementFilters,month:e.target.value})} style={inputStyle} /></div>
+                <div><LabelLike>Persona</LabelLike><select value={movementFilters.person} onChange={(e)=>setMovementFilters({...movementFilters,person:e.target.value})} style={inputStyle}><option value="all">Todas</option>{initialPeople.map(p=><option key={p} value={p}>{p}</option>)}</select></div>
+                <div><LabelLike>Tipo</LabelLike><select value={movementFilters.type} onChange={(e)=>setMovementFilters({...movementFilters,type:e.target.value})} style={inputStyle}><option value="all">Todos</option>{initialTypes.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+                <div><LabelLike>Categoría</LabelLike><select value={movementFilters.category} onChange={(e)=>setMovementFilters({...movementFilters,category:e.target.value})} style={inputStyle}><option value="all">Todas</option>{Object.values(initialCategoryMap).flat().map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+                <div><LabelLike>Moneda</LabelLike><select value={movementFilters.currency} onChange={(e)=>setMovementFilters({...movementFilters,currency:e.target.value})} style={inputStyle}><option value="all">Todas</option><option value="ARS">ARS</option><option value="USD">USD</option></select></div>
+              </div>
+            </div>
+            <div style={cardStyle}>
+              <h2 style={{marginTop:0}}>Últimos movimientos</h2>
+              {loading && <div style={{color:"#64748b"}}>Cargando desde Supabase...</div>}
+              {!loading && filteredMovements.length === 0 && <div style={{color:"#64748b"}}>No hay movimientos para esos filtros.</div>}
+              <div style={{display:"grid",gap:"10px"}}>
+                {filteredMovements.map((m) => (
+                  <div key={m.id} style={{border:"1px solid #e5e7eb",borderRadius:"14px",padding:"14px",background:"#fff",display:"flex",justifyContent:"space-between",gap:"12px",flexWrap:"wrap"}}>
                     <div>
-                      <div className="font-medium">{m.category} · {m.description || "Sin detalle"}</div>
-                      <div className="text-sm text-slate-500">{m.date} · {m.person} · {m.type} · {m.paymentMethod} · {m.currency}</div>
+                      <div style={{fontWeight:600}}>{m.category} · {m.description || "Sin detalle"}</div>
+                      <div style={{fontSize:"14px",color:"#64748b"}}>{m.date} · {m.person} · {m.type} · {m.paymentMethod} · {m.currency}</div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-lg font-semibold">{formatAmount(m.amountArs)}</div>
-                      <div className="text-xs text-slate-500">Original: {money(m.originalAmount, m.currency)} · TC: {m.fxRate}</div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontWeight:700,fontSize:"18px"}}>{formatAmount(m.amountArs)}</div>
+                      <div style={{fontSize:"12px",color:"#64748b"}}>Original: {money(m.originalAmount, m.currency)} · TC: {m.fxRate}</div>
                     </div>
                   </div>
                 ))}
-                {!loading && filteredMovements.length === 0 && <div className="text-sm text-slate-500">No hay movimientos para esos filtros.</div>}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
 }
+
+function LabelLike({ children }) {
+  return <div style={{marginBottom:"6px",fontSize:"14px",fontWeight:600}}>{children}</div>;
+}
+
+function StatCard({ title, value }) {
+  return (
+    <div style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:"16px",padding:"16px"}}>
+      <div style={{fontSize:"14px",color:"#64748b",marginBottom:"6px"}}>{title}</div>
+      <div style={{fontWeight:700,fontSize:"24px"}}>{value}</div>
+    </div>
+  );
+}
+
+const root = createRoot(document.getElementById("root"));
+root.render(<App />);
