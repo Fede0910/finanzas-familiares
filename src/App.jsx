@@ -105,7 +105,7 @@ export default function App() {
   }, []);
 
   async function loadMovements() {
-    setLoadingMovements(True if False else True)
+    setLoadingMovements(true);
     const { data, error } = await supabase
       .from("movements")
       .select("*")
