@@ -325,3 +325,10 @@ body {
   .filter-grid.six-col { grid-template-columns: 1fr; }
   .kpi-compact { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ultima actualizacion de styles.css */
+.compact-stats .stat-card { padding: 14px; }
+.kpi-inline { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.small-icon { font-size:1rem; margin-bottom:0; }
+.stat-label.inline { margin-top:0; }
+@media (max-width:780px){ .compact-stats .stat-card{ padding:12px; } }
