@@ -21,7 +21,7 @@ function money(n, currency = "ARS") {
 }
 
 function monthKey(dateString) {
-  const d = new Date(dateString + "T00:00:00");
+  const d = new Date(`${dateString}T00:00:00`);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
@@ -53,6 +53,36 @@ function emptyMovement(today) {
   };
 }
 
+function Field({ label, children }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function Stat({ title, value }) {
+  return (
+    <div className="stat-card">
+      <span>{title}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function Placeholder({ title, text }) {
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <h2>{title}</h2>
+        <span className="panel-note">Siguiente bloque</span>
+      </div>
+      <div className="empty-state">{text}</div>
+    </section>
+  );
+}
+
 export default function App() {
   const today = new Date().toISOString().slice(0, 10);
   const currentMonth = new Date().toISOString().slice(0, 7);
@@ -60,12 +90,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("cargar");
   const [displayCurrency, setDisplayCurrency] = useState("ARS");
   const [blueRate, setBlueRate] = useState(1250);
-
   const [movements, setMovements] = useState([]);
   const [loadingMovements, setLoadingMovements] = useState(true);
   const [savingMovement, setSavingMovement] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
-
   const [movementForm, setMovementForm] = useState(emptyMovement(today));
   const [filters, setFilters] = useState({
     month: currentMonth,
@@ -248,7 +276,7 @@ export default function App() {
         <header className="hero">
           <div>
             <h1>Finanzas Familiares</h1>
-            <p>Base prolija otra vez, manteniendo el guardado real en Supabase.</p>
+            <p>Una sola base: Supabase funcionando, UI prolija y lista para seguir con presupuesto, deudas y reportes.</p>
           </div>
           <div className="hero-right">
             <select className="control control-compact" value={displayCurrency} onChange={(e) => setDisplayCurrency(e.target.value)}>
@@ -263,6 +291,10 @@ export default function App() {
             ["cargar", "Cargar"],
             ["dashboard", "Dashboard"],
             ["datos", "Datos"],
+            ["presupuesto", "Presupuesto"],
+            ["deudas", "Deudas"],
+            ["metas", "Metas"],
+            ["config", "Config."],
           ].map(([value, label]) => (
             <button key={value} className={`tab ${activeTab === value ? "active" : ""}`} onClick={() => setActiveTab(value)}>
               {label}
@@ -274,7 +306,7 @@ export default function App() {
           <section className="panel">
             <div className="panel-header">
               <h2>Carga rápida</h2>
-              <span className="panel-note">Diseñada para celular</span>
+              <span className="panel-note">Pensada para celular</span>
             </div>
 
             <div className="grid-form">
@@ -318,7 +350,7 @@ export default function App() {
             </div>
 
             <div className="info-box">
-              Ya guarda en Supabase. En el siguiente bloque sacamos el dólar global y pasamos a cotización histórica por fecha.
+              Sigue guardando en Supabase. El próximo paso será reemplazar el dólar actual por cotización histórica por fecha y sumar presupuesto y deudas conectadas.
             </div>
 
             <button className="primary-btn" onClick={handleSaveMovement} disabled={savingMovement}>
@@ -481,25 +513,12 @@ export default function App() {
             </section>
           </>
         )}
+
+        {activeTab === "presupuesto" && <Placeholder title="Presupuesto" text="Lo dejamos para el bloque siguiente, sin tocar la base visual actual." />}
+        {activeTab === "deudas" && <Placeholder title="Deudas" text="Lo dejamos para el bloque siguiente, ya conectado a la estructura real del proyecto." />}
+        {activeTab === "metas" && <Placeholder title="Metas" text="Lo dejamos para el bloque siguiente, manteniendo esta UI y Supabase intactos." />}
+        {activeTab === "config" && <Placeholder title="Config." text="Lo dejamos para el bloque siguiente. Primero consolidamos la base visual y los datos." />}
       </div>
-    </div>
-  );
-}
-
-function Field({ label, children }) {
-  return (
-    <label className="field">
-      <span>{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function Stat({ title, value }) {
-  return (
-    <div className="stat-card">
-      <span>{title}</span>
-      <strong>{value}</strong>
     </div>
   );
 }
