@@ -828,52 +828,216 @@ export default function App() {
             <Card>
               <CardHead title="Saldo inicial del mes" icon="🏦" />
               <div className="form-grid three-col">
-                <Field label="Mes"><Input type="month" value={balanceForm.month} onChange={(e) => setBalanceForm({ ...balanceForm, month: e.target.value })} /></Field>
-                <Field label="Saldo inicial (ARS)"><Input type="number" value={balanceForm.opening} onChange={(e) => setBalanceForm({ ...balanceForm, opening: e.target.value })} placeholder="0" /></Field>
-                <Field label="Notas"><Input value={balanceForm.notes} onChange={(e) => setBalanceForm({ ...balanceForm, notes: e.target.value })} placeholder="Opcional" /></Field>
+                <Field label="Mes">
+                  <Input
+                    type="month"
+                    value={balanceForm.month}
+                    onChange={(e) => setBalanceForm({ ...balanceForm, month: e.target.value })}
+                  />
+                </Field>
+
+                <Field label="Saldo inicial (ARS)">
+                  <Input
+                    type="number"
+                    value={balanceForm.opening}
+                    onChange={(e) => setBalanceForm({ ...balanceForm, opening: e.target.value })}
+                    placeholder="0"
+                  />
+                </Field>
+
+                <Field label="Notas">
+                  <Input
+                    value={balanceForm.notes}
+                    onChange={(e) => setBalanceForm({ ...balanceForm, notes: e.target.value })}
+                    placeholder="Opcional"
+                  />
+                </Field>
               </div>
-              <div style={{ marginTop: 12 }}><Btn onClick={saveBalance}>Guardar saldo inicial</Btn></div>
+
+              <div style={{ marginTop: 12 }}>
+                <Btn onClick={saveBalance}>Guardar saldo inicial</Btn>
+              </div>
             </Card>
 
             <Card>
               <CardHead title="Agregar presupuesto" icon="🎯" />
               <div className="form-grid">
-                <Field label="Mes"><Input type="month" value={budgetForm.month} onChange={(e) => setBudgetForm({ ...budgetForm, month: e.target.value })} /></Field>
-                <Field label="Persona"><Select value={budgetForm.person} onChange={(v) => setBudgetForm({ ...budgetForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
-                <Field label="Tipo"><Select value={budgetForm.type} onChange={(v) => setBudgetForm({ ...budgetForm, type: v, category: (categoryMap[v] || [])[0] || "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                <Field label="Categoría"><Select value={budgetForm.category} onChange={(v) => setBudgetForm({ ...budgetForm, category: v })}>{(categoryMap[budgetForm.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
-                <Field label="Importe presupuestado"><Input type="number" value={budgetForm.planned} onChange={(e) => setBudgetForm({ ...budgetForm, planned: e.target.value })} placeholder="0" /></Field>
+                <Field label="Mes">
+                  <Input
+                    type="month"
+                    value={budgetForm.month}
+                    onChange={(e) => setBudgetForm({ ...budgetForm, month: e.target.value })}
+                  />
+                </Field>
+
+                <Field label="Persona">
+                  <Select
+                    value={budgetForm.person}
+                    onChange={(v) => setBudgetForm({ ...budgetForm, person: v })}
+                  >
+                    {people.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+
+                <Field label="Tipo">
+                  <Select
+                    value={budgetForm.type}
+                    onChange={(v) =>
+                      setBudgetForm({
+                        ...budgetForm,
+                        type: v,
+                        category: (categoryMap[v] || [])[0] || "",
+                      })
+                    }
+                  >
+                    {types.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+
+                <Field label="Categoría">
+                  <Select
+                    value={budgetForm.category}
+                    onChange={(v) => setBudgetForm({ ...budgetForm, category: v })}
+                  >
+                    {(categoryMap[budgetForm.type] || []).map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+
+                <Field label="Importe presupuestado">
+                  <Input
+                    type="number"
+                    value={budgetForm.planned}
+                    onChange={(e) => setBudgetForm({ ...budgetForm, planned: e.target.value })}
+                    placeholder="0"
+                  />
+                </Field>
               </div>
-              <div style={{ marginTop: 12 }}><Btn onClick={addBudget}>＋ Agregar presupuesto</Btn></div>
+
+              <div style={{ marginTop: 12 }}>
+                <Btn onClick={addBudget}>＋ Agregar presupuesto</Btn>
+              </div>
             </Card>
 
             <Card>
               <CardHead title="Presupuesto vs Real" icon="📊" />
+              <div style={{ marginBottom: 14 }}>
+                <Field label="Mes a analizar">
+                  <Input
+                    type="month"
+                    value={reportMonth}
+                    onChange={(e) => {
+                      setReportMonth(e.target.value);
+                      setFilters((f) => ({ ...f, month: e.target.value }));
+                    }}
+                    className="w-auto"
+                  />
+                </Field>
+              </div>
+
               {budgetComparison.length === 0 && <EmptyState msg="No hay presupuestos para este mes." />}
+
               {budgetComparison.map((b) => {
                 const isExpenseLike = b.type === "Egreso";
                 const over = b.execution > 100;
                 const warn = b.execution >= 85;
-                const rowClass = isExpenseLike ? (over ? "budget-over" : warn ? "budget-warn" : "budget-ok") : (over ? "budget-ok" : "budget-warn");
+
+                const rowClass = isExpenseLike
+                  ? over
+                    ? "budget-over"
+                    : warn
+                      ? "budget-warn"
+                      : "budget-ok"
+                  : over
+                    ? "budget-ok"
+                    : "budget-warn";
+
                 return (
-                  <div key={b.id} className={`budget-row ${rowClass}`}>
-                    <div className="budget-row-head">
-                      <div>
-                        <div className="fw">{b.category}</div>
-                        <div className="muted small">{b.month} · {b.person} · {b.type}{b.type === "Egreso" ? ` · ${getFV(b.type, b.category)}` : ""}</div>
+                  <div key={b.id} className={`budget-row ${rowClass} budget-row-inline`}>
+                    <div className="budget-inline-main">
+                      <div className="budget-inline-title">
+                        <div className="fw">
+                          {b.category}
+                          {b.type === "Egreso" ? ` · ${getFV(b.type, b.category)}` : ""}
+                        </div>
+                        <div className="muted small">
+                          {b.month} · {b.person} · {b.type}
+                        </div>
                       </div>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <Badge color={isExpenseLike ? (over ? "red" : warn ? "amber" : "green") : (over ? "green" : "amber")}>{b.execution.toFixed(1)}%</Badge>
-                        <button className="del-btn" onClick={() => deleteBudget(b.id)}>🗑</button>
+
+                      <div className="budget-inline-metrics">
+                        <div className="budget-metric">
+                          <span className="muted small">Presupuesto</span>
+                          <strong>{fmt(b.planned, b.plannedUsd || 0)}</strong>
+                        </div>
+
+                        <div className="budget-metric">
+                          <span className="muted small">Real</span>
+                          <strong className={isExpenseLike && b.actual > b.planned ? "red" : ""}>
+                            {fmt(b.actual, b.actualUsd || 0)}
+                          </strong>
+                        </div>
+
+                        <div className="budget-metric">
+                          <span className="muted small">Diferencia</span>
+                          <strong className={b.difference < 0 && isExpenseLike ? "red" : "green"}>
+                            {fmt(b.difference, b.differenceUsd || 0)}
+                          </strong>
+                        </div>
+
+                        <div className="budget-metric">
+                          <span className="muted small">Estado</span>
+                          <strong>
+                            {isExpenseLike
+                              ? over
+                                ? "Excedido"
+                                : warn
+                                  ? "Al límite"
+                                  : "Dentro"
+                              : over
+                                ? "Cumplido / superado"
+                                : "En progreso"}
+                          </strong>
+                        </div>
+
+                        <div className="budget-metric budget-metric-badge">
+                          <Badge
+                            color={
+                              isExpenseLike
+                                ? over
+                                  ? "red"
+                                  : warn
+                                    ? "amber"
+                                    : "green"
+                                : over
+                                  ? "green"
+                                  : "amber"
+                            }
+                          >
+                            {b.execution.toFixed(1)}%
+                          </Badge>
+                        </div>
+
+                        <button className="del-btn" onClick={() => deleteBudget(b.id)}>
+                          🗑
+                        </button>
                       </div>
                     </div>
-                    <div className="budget-amounts">
-                      <div><span className="muted small">Presupuesto</span><div>{fmtArs(b.planned)}</div></div>
-                      <div><span className="muted small">Real</span><div>{fmtArs(b.actual)}</div></div>
-                      <div><span className="muted small">Diferencia</span><div className={b.difference < 0 && isExpenseLike ? "red" : "green"}>{fmtArs(b.difference)}</div></div>
-                      <div><span className="muted small">Estado</span><div>{isExpenseLike ? (over ? "Excedido" : warn ? "Al límite" : "Dentro") : (over ? "Cumplido / superado" : "En progreso")}</div></div>
+
+                    <div className="budget-inline-progress">
+                      <Progress value={b.execution} />
                     </div>
-                    <Progress value={b.execution} />
                   </div>
                 );
               })}
@@ -882,176 +1046,113 @@ export default function App() {
             <Card>
               <CardHead title="Crear meta" icon="⭐" />
               <div className="form-grid">
-                <Field label="Nombre"><Input value={goalForm.name} onChange={(e) => setGoalForm({ ...goalForm, name: e.target.value })} /></Field>
-                <Field label="Responsable"><Select value={goalForm.owner} onChange={(v) => setGoalForm({ ...goalForm, owner: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
-                <Field label="Tipo"><Select value={goalForm.goalType} onChange={(v) => setGoalForm({ ...goalForm, goalType: v })}><option value="Ahorro">Ahorro</option><option value="Inversión">Inversión</option></Select></Field>
-                <Field label="Periodicidad"><Select value={goalForm.periodType} onChange={(v) => setGoalForm({ ...goalForm, periodType: v })}><option value="Mensual">Mensual</option><option value="Anual">Anual</option></Select></Field>
-                <Field label="Objetivo (ARS)"><Input type="number" value={goalForm.target} onChange={(e) => setGoalForm({ ...goalForm, target: e.target.value })} /></Field>
-                <Field label="Notas"><Input value={goalForm.notes} onChange={(e) => setGoalForm({ ...goalForm, notes: e.target.value })} /></Field>
+                <Field label="Nombre">
+                  <Input
+                    value={goalForm.name}
+                    onChange={(e) => setGoalForm({ ...goalForm, name: e.target.value })}
+                  />
+                </Field>
+
+                <Field label="Responsable">
+                  <Select
+                    value={goalForm.owner}
+                    onChange={(v) => setGoalForm({ ...goalForm, owner: v })}
+                  >
+                    {people.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+
+                <Field label="Tipo">
+                  <Select
+                    value={goalForm.goalType}
+                    onChange={(v) => setGoalForm({ ...goalForm, goalType: v })}
+                  >
+                    <option value="Ahorro">Ahorro</option>
+                    <option value="Inversión">Inversión</option>
+                  </Select>
+                </Field>
+
+                <Field label="Periodicidad">
+                  <Select
+                    value={goalForm.periodType}
+                    onChange={(v) => setGoalForm({ ...goalForm, periodType: v })}
+                  >
+                    <option value="Mensual">Mensual</option>
+                    <option value="Anual">Anual</option>
+                  </Select>
+                </Field>
+
+                <Field label="Objetivo (ARS)">
+                  <Input
+                    type="number"
+                    value={goalForm.target}
+                    onChange={(e) => setGoalForm({ ...goalForm, target: e.target.value })}
+                  />
+                </Field>
+
+                <Field label="Notas">
+                  <Input
+                    value={goalForm.notes}
+                    onChange={(e) => setGoalForm({ ...goalForm, notes: e.target.value })}
+                  />
+                </Field>
               </div>
-              <div style={{ marginTop: 12 }}><Btn onClick={addGoal}>＋ Crear meta</Btn></div>
+
+              <div style={{ marginTop: 12 }}>
+                <Btn onClick={addGoal}>＋ Crear meta</Btn>
+              </div>
             </Card>
 
             <Card>
               <CardHead title="Avance de metas" icon="🚀" />
               {!goalProgress.length && <EmptyState msg="No hay metas cargadas." />}
+
               {goalProgress.map((g) => (
-                <div key={g.id} className="budget-row budget-ok">
-                  <div className="budget-row-head">
-                    <div>
+                <div key={g.id} className="budget-row budget-ok budget-row-inline">
+                  <div className="budget-inline-main">
+                    <div className="budget-inline-title">
                       <div className="fw">{g.name}</div>
-                      <div className="muted small">{g.owner} · {g.goal_type} · {g.period_type}</div>
+                      <div className="muted small">
+                        {g.owner} · {g.goalType} · {g.periodType}
+                      </div>
                     </div>
-                    <button className="del-btn" onClick={() => deleteGoal(g.id)}>🗑</button>
+
+                    <div className="budget-inline-metrics">
+                      <div className="budget-metric">
+                        <span className="muted small">Objetivo</span>
+                        <strong>{fmt(g.target, g.targetUsd || 0)}</strong>
+                      </div>
+
+                      <div className="budget-metric">
+                        <span className="muted small">Actual</span>
+                        <strong>{fmt(g.currentArs, g.currentUsd || 0)}</strong>
+                      </div>
+
+                      <div className="budget-metric">
+                        <span className="muted small">%</span>
+                        <strong>{g.pct.toFixed(1)}%</strong>
+                      </div>
+
+                      <div className="budget-metric">
+                        <span className="muted small">Período</span>
+                        <strong>{g.periodType}</strong>
+                      </div>
+
+                      <button className="del-btn" onClick={() => deleteGoal(g.id)}>
+                        🗑
+                      </button>
+                    </div>
                   </div>
-                  <div className="budget-amounts">
-                    <div><span className="muted small">Objetivo</span><div>{fmtArs(g.target_amount || 0)}</div></div>
-                    <div><span className="muted small">Actual</span><div>{fmtArs(g.currentArs)}</div></div>
-                    <div><span className="muted small">%</span><div>{g.pct.toFixed(1)}%</div></div>
-                    <div><span className="muted small">Período</span><div>{g.period_type}</div></div>
+
+                  <div className="budget-inline-progress">
+                    <Progress value={g.pct} />
                   </div>
-                  <Progress value={g.pct} />
                 </div>
               ))}
             </Card>
           </div>
         )}
-
-        {tab === "reportes" && (
-          <div className="tab-content">
-            <div className="two-col">
-              <Card>
-                <CardHead title={`Gastos por categoría · ${reportMonth}`} icon="🥧" />
-                <PieChart data={monthlyByCategory} nameKey="category" valueKey="total" formatter={fmt} />
-              </Card>
-              <Card>
-                <CardHead title={`Gasto por persona · ${reportMonth}`} icon="👥" />
-                {!monthlyByPerson.length && <EmptyState msg="Sin egresos para ese mes." />}
-                {monthlyByPerson.map((r) => <div key={r.person} className="report-row"><div>{r.person}</div><strong>{fmt(r.total)} · {(r.pct * 100).toFixed(1)}%</strong></div>)}
-              </Card>
-            </div>
-            <div className="two-col">
-              <Card>
-                <CardHead title="Ingresos vs egresos" icon="📈" />
-                <BarChart data={annualByMonth} xKey="month" bars={[{ key: "income", label: "Ingresos", color: "#16a34a" }, { key: "expenses", label: "Egresos", color: "#dc2626" }]} formatter={(v, short) => short ? (displayCurrency === "USD" ? `${v.toFixed(0)}` : `${Math.round(v/1000)}K`) : fmt(v)} />
-              </Card>
-              <Card>
-                <CardHead title="Fijos vs variables" icon="🧩" />
-                <BarChart data={annualByMonth} xKey="month" bars={[{ key: "fixed", label: "Fijos", color: "#dc2626" }, { key: "variable", label: "Variables", color: "#f59e0b" }]} formatter={(v, short) => short ? (displayCurrency === "USD" ? `${v.toFixed(0)}` : `${Math.round(v/1000)}K`) : fmt(v)} />
-              </Card>
-            </div>
-          </div>
-        )}
-
-        {tab === "deudas" && (
-          <div className="tab-content">
-            <div className="two-col">
-              <Card>
-                <CardHead title="Agregar deuda" icon="💳" />
-                <div className="form-grid two-col-form">
-                  <Field label="Nombre"><Input value={debtForm.name} onChange={(e) => setDebtForm({ ...debtForm, name: e.target.value })} /></Field>
-                  <Field label="Responsable"><Select value={debtForm.owner} onChange={(v) => setDebtForm({ ...debtForm, owner: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
-                  <Field label="Saldo actual"><Input type="number" value={debtForm.balance} onChange={(e) => setDebtForm({ ...debtForm, balance: e.target.value })} /></Field>
-                  <Field label="Cuota estimada"><Input type="number" value={debtForm.installment} onChange={(e) => setDebtForm({ ...debtForm, installment: e.target.value })} /></Field>
-                  <Field label="Día de vencimiento"><Input type="number" value={debtForm.dueDay} onChange={(e) => setDebtForm({ ...debtForm, dueDay: e.target.value })} /></Field>
-                  <Field label="Prioridad"><Select value={debtForm.priority} onChange={(v) => setDebtForm({ ...debtForm, priority: v })}><option value="Alta">Alta</option><option value="Media">Media</option><option value="Baja">Baja</option></Select></Field>
-                  <Field label="Tasa"><Input type="number" value={debtForm.rate} onChange={(e) => setDebtForm({ ...debtForm, rate: e.target.value })} /></Field>
-                  <Field label="Notas"><Input value={debtForm.notes} onChange={(e) => setDebtForm({ ...debtForm, notes: e.target.value })} /></Field>
-                </div>
-                <div style={{ marginTop: 12 }}><Btn onClick={addDebt}>＋ Agregar deuda</Btn></div>
-              </Card>
-              <Card>
-                <CardHead title="Registrar pago de deuda" icon="💸" />
-                <div className="form-grid two-col-form">
-                  <Field label="Deuda"><Select value={debtPayForm.debtId} onChange={(v) => setDebtPayForm({ ...debtPayForm, debtId: v })}><option value="">Elegir deuda…</option>{personDebts.map((d) => <option key={d.id} value={String(d.id)}>{d.name}</option>)}</Select></Field>
-                  <Field label="Fecha"><Input type="date" value={debtPayForm.date} onChange={(e) => setDebtPayForm({ ...debtPayForm, date: e.target.value })} /></Field>
-                  <Field label="Importe"><Input type="number" value={debtPayForm.amount} onChange={(e) => setDebtPayForm({ ...debtPayForm, amount: e.target.value })} /></Field>
-                  <Field label="Persona"><Select value={debtPayForm.person} onChange={(v) => setDebtPayForm({ ...debtPayForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
-                  <Field label="Medio de pago"><Select value={debtPayForm.paymentMethod} onChange={(v) => setDebtPayForm({ ...debtPayForm, paymentMethod: v })}>{paymentMethods.map((m) => <option key={m} value={m}>{m}</option>)}</Select></Field>
-                  <Field label="Notas"><Input value={debtPayForm.notes} onChange={(e) => setDebtPayForm({ ...debtPayForm, notes: e.target.value })} /></Field>
-                </div>
-                {selectedDebtForPay && <InfoBox color="blue">Saldo actual: <strong>{fmtArs(selectedDebtForPay.balance)}</strong> · Cuota estimada: <strong>{fmtArs(selectedDebtForPay.installment)}</strong></InfoBox>}
-                <div style={{ marginTop: 12 }}><Btn onClick={registerDebtPayment}>Registrar pago</Btn></div>
-              </Card>
-            </div>
-            <div className="debt-cards">
-              {personDebts.length === 0 && <EmptyState msg="No hay deudas cargadas." />}
-              {personDebts.map((d) => {
-                const pct = d.initialBalance > 0 ? ((d.totalPaid || 0) / d.initialBalance) * 100 : 0;
-                return (
-                  <Card key={d.id}>
-                    <div className="debt-card-head"><div><div className="fw">{d.name}</div><div className="muted small">{d.owner} · Día {d.dueDay} · Prioridad {d.priority}</div></div><button className="del-btn" onClick={() => deleteDebt(d.id)}>🗑</button></div>
-                    <div className="debt-amounts"><div><span className="muted small">Saldo</span><div className="fw red">{fmtArs(d.balance)}</div></div><div><span className="muted small">Cuota</span><div>{fmtArs(d.installment)}</div></div><div><span className="muted small">Pagado</span><div className="green">{fmtArs(d.totalPaid || 0)}</div></div><div><span className="muted small">Vence día</span><div>{d.dueDay || "—"}</div></div></div>
-                    <Progress value={pct} />
-                    <div className="muted small" style={{ marginTop: 4 }}>Cancelado: {pct.toFixed(1)}%</div>
-                  </Card>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {tab === "config" && (
-          <div className="tab-content">
-            <div className="two-col">
-              <Card>
-                <CardHead title="Catálogos" icon="⚙️" />
-                <div className="catalog-section">
-                  <label className="field-label">Personas</label>
-                  <div className="catalog-add">
-                    <Input value={catalogForm.person} onChange={(e) => setCatalogForm({ ...catalogForm, person: e.target.value })} placeholder="Nueva persona" />
-                    <Btn small onClick={() => { const v = catalogForm.person.trim(); if (v && !people.includes(v)) setPeople([...people, v]); setCatalogForm({ ...catalogForm, person: "" }); }}>+ Agregar</Btn>
-                  </div>
-                  <div className="tag-list">{people.map((p) => <span key={p} className="tag">{p}<button onClick={() => setPeople(people.filter((x) => x !== p))}>×</button></span>)}</div>
-                </div>
-                <div className="catalog-section">
-                  <label className="field-label">Tipos</label>
-                  <div className="catalog-add">
-                    <Input value={catalogForm.type} onChange={(e) => setCatalogForm({ ...catalogForm, type: e.target.value })} placeholder="Nuevo tipo" />
-                    <Btn small onClick={() => { const v = catalogForm.type.trim(); if (v && !types.includes(v)) setTypes([...types, v]); setCatalogForm({ ...catalogForm, type: "" }); }}>+ Agregar</Btn>
-                  </div>
-                  <div className="tag-list">{types.map((t) => <span key={t} className="tag">{t}<button onClick={() => setTypes(types.filter((x) => x !== t))}>×</button></span>)}</div>
-                </div>
-              </Card>
-              <Card>
-                <CardHead title="Categorías con F / V" icon="🧩" />
-                <div className="form-grid three-col">
-                  <Field label="Tipo"><Select value={catalogForm.categoryType} onChange={(v) => setCatalogForm({ ...catalogForm, categoryType: v })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                  <Field label="Categoría"><Input value={catalogForm.category} onChange={(e) => setCatalogForm({ ...catalogForm, category: e.target.value })} placeholder="Nueva categoría" /></Field>
-                  <Field label="F / V"><Select value={catalogForm.categoryFv} onChange={(v) => setCatalogForm({ ...catalogForm, categoryFv: v })}><option value="F">Fijo</option><option value="V">Variable</option></Select></Field>
-                </div>
-                <div style={{ marginTop: 12 }}><Btn onClick={addCategory}>＋ Agregar categoría</Btn></div>
-                <div style={{ marginTop: 16 }}>
-                  {types.map((type) => {
-                    const rows = categoryRows.filter((r) => r.type === type);
-                    if (!rows.length) return null;
-                    return (
-                      <div key={type} className="catalog-section">
-                        <label className="field-label">{type}</label>
-                        <div className="tag-list">
-                          {rows.map((row) => (
-                            <span key={row.id} className="tag">
-                              {row.name}
-                              {type === "Egreso" && <button onClick={() => toggleCategoryFV(row)}>{row.fv}</button>}
-                              <button onClick={() => removeCategory(row)}>×</button>
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <InfoBox color="blue">En <strong>Egreso</strong>, cada categoría queda clasificada como <strong>F</strong> o <strong>V</strong>. Esa clasificación alimenta automáticamente los KPIs.</InfoBox>
-              </Card>
-            </div>
-            <Card>
-              <CardHead title="Cotización manual" icon="💱" />
-              <div className="form-grid three-col"><Field label="USD blue (ARS por dólar)"><Input type="number" value={blueRate} onChange={(e) => setBlueRate(Number(e.target.value))} /></Field></div>
-              <div className="muted small" style={{ marginTop: 8 }}>Se usa solo para nuevas cargas en USD. Los reportes en USD toman la columna histórica del movimiento.</div>
-            </Card>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
