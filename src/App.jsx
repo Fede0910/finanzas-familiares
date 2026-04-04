@@ -12,6 +12,25 @@ const CATEGORY_MAP = {
   Inversión: ["FCI", "Acciones", "Cedears", "Cripto"],
 };
 
+const SAMPLE_BUDGETS = [
+  { id: 1, month: "2026-04", person: "Compartido", category: "Supermercado", plannedArs: 320000, actualArs: 278000 },
+  { id: 2, month: "2026-04", person: "Federico", category: "Salud mental", plannedArs: 60000, actualArs: 45000 },
+  { id: 3, month: "2026-04", person: "Compartido", category: "Servicios", plannedArs: 180000, actualArs: 191000 },
+  { id: 4, month: "2026-04", person: "Compartido", category: "Deuda", plannedArs: 210000, actualArs: 150000 },
+];
+
+const SAMPLE_DEBTS = [
+  { id: 1, name: "Tarjeta Visa", owner: "Federico", balanceArs: 420000, installmentArs: 70000, dueDay: 10, priority: "Alta", paidPct: 28, status: "Activa" },
+  { id: 2, name: "Préstamo familiar", owner: "Compartido", balanceArs: 900000, installmentArs: 150000, dueDay: 5, priority: "Media", paidPct: 12, status: "Activa" },
+  { id: 3, name: "Notebook", owner: "Mica", balanceArs: 310000, installmentArs: 52000, dueDay: 18, priority: "Media", paidPct: 46, status: "Activa" },
+];
+
+const SAMPLE_GOALS = [
+  { id: 1, name: "Fondo de emergencia", targetArs: 3000000, currentArs: 860000 },
+  { id: 2, name: "Vacaciones", targetArs: 1800000, currentArs: 420000 },
+  { id: 3, name: "Inversión familiar", targetArs: 2500000, currentArs: 510000 },
+];
+
 function money(n, currency = "ARS") {
   return new Intl.NumberFormat("es-AR", {
     style: "currency",
@@ -62,24 +81,13 @@ function Field({ label, children }) {
   );
 }
 
-function Stat({ title, value }) {
+function Stat({ title, value, note }) {
   return (
     <div className="stat-card">
       <span>{title}</span>
       <strong>{value}</strong>
+      {note ? <small>{note}</small> : null}
     </div>
-  );
-}
-
-function Placeholder({ title, text }) {
-  return (
-    <section className="panel">
-      <div className="panel-header">
-        <h2>{title}</h2>
-        <span className="panel-note">Siguiente bloque</span>
-      </div>
-      <div className="empty-state">{text}</div>
-    </section>
   );
 }
 
@@ -90,6 +98,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("cargar");
   const [displayCurrency, setDisplayCurrency] = useState("ARS");
   const [blueRate, setBlueRate] = useState(1250);
+  const [blueLabel, setBlueLabel] = useState("Cotización cargada");
   const [movements, setMovements] = useState([]);
   const [loadingMovements, setLoadingMovements] = useState(true);
   const [savingMovement, setSavingMovement] = useState(false);
@@ -110,8 +119,13 @@ export default function App() {
         if (!res.ok) return;
         const data = await res.json();
         const rate = Number(data?.venta || 0);
-        if (rate > 0) setBlueRate(rate);
-      } catch {}
+        if (rate > 0) {
+          setBlueRate(rate);
+          setBlueLabel("Cotización cargada");
+        }
+      } catch {
+        setBlueLabel("Valor manual");
+      }
     }
     fetchBlue();
   }, []);
@@ -151,20 +165,6 @@ export default function App() {
 
   const categoriesForType = movementForm.type ? CATEGORY_MAP[movementForm.type] || [] : [];
 
-  const summary = useMemo(() => {
-    const income = movements.filter((m) => m.type === "Ingreso").reduce((a, b) => a + b.amountArs, 0);
-    const expenses = movements.filter((m) => m.type === "Egreso").reduce((a, b) => a + b.amountArs, 0);
-    const savings = movements.filter((m) => m.type === "Ahorro").reduce((a, b) => a + b.amountArs, 0);
-    const investments = movements.filter((m) => m.type === "Inversión").reduce((a, b) => a + b.amountArs, 0);
-    return {
-      income,
-      expenses,
-      savings,
-      investments,
-      net: income - expenses - savings - investments,
-    };
-  }, [movements]);
-
   const filteredMovements = useMemo(() => {
     return movements.filter((m) => {
       if (filters.month && monthKey(m.date) !== filters.month) return false;
@@ -176,7 +176,21 @@ export default function App() {
     });
   }, [movements, filters]);
 
-  const categoryRows = useMemo(() => {
+  const summary = useMemo(() => {
+    const income = filteredMovements.filter((m) => m.type === "Ingreso").reduce((a, b) => a + b.amountArs, 0);
+    const expenses = filteredMovements.filter((m) => m.type === "Egreso").reduce((a, b) => a + b.amountArs, 0);
+    const savings = filteredMovements.filter((m) => m.type === "Ahorro").reduce((a, b) => a + b.amountArs, 0);
+    const investments = filteredMovements.filter((m) => m.type === "Inversión").reduce((a, b) => a + b.amountArs, 0);
+    return {
+      income,
+      expenses,
+      savings,
+      investments,
+      net: income - expenses - savings - investments,
+    };
+  }, [filteredMovements]);
+
+  const expenseByCategory = useMemo(() => {
     const buckets = {};
     filteredMovements
       .filter((m) => m.type === "Egreso")
@@ -192,6 +206,30 @@ export default function App() {
       }))
       .sort((a, b) => b.amountArs - a.amountArs);
   }, [filteredMovements]);
+
+  const spendingByPerson = useMemo(() => {
+    const buckets = {};
+    filteredMovements
+      .filter((m) => m.type === "Egreso")
+      .forEach((m) => {
+        buckets[m.person] = (buckets[m.person] || 0) + m.amountArs;
+      });
+    const total = Object.values(buckets).reduce((a, b) => a + b, 0);
+    return Object.entries(buckets)
+      .map(([person, amountArs]) => ({
+        person,
+        amountArs,
+        pct: total > 0 ? (amountArs / total) * 100 : 0,
+      }))
+      .sort((a, b) => b.amountArs - a.amountArs);
+  }, [filteredMovements]);
+
+  const budgets = useMemo(() => {
+    return SAMPLE_BUDGETS.filter((b) => b.month === filters.month).map((b) => {
+      const execution = b.plannedArs > 0 ? (b.actualArs / b.plannedArs) * 100 : 0;
+      return { ...b, execution, diffArs: b.plannedArs - b.actualArs };
+    });
+  }, [filters.month]);
 
   async function handleSaveMovement() {
     if (!movementForm.type || !movementForm.category || !movementForm.originalAmount) return;
@@ -253,19 +291,18 @@ export default function App() {
     setMovementForm(emptyMovement(today));
     setSaveMessage("Guardado en Supabase.");
     setSavingMovement(false);
+    setActiveTab("datos");
   }
 
   async function handleDeleteMovement(id) {
     const ok = window.confirm("¿Querés borrar este movimiento?");
     if (!ok) return;
 
-    const previous = movements;
+    const backup = movements;
     setMovements((prev) => prev.filter((m) => m.id !== id));
-
     const { error } = await supabase.from("movements").delete().eq("id", id);
-
     if (error) {
-      setMovements(previous);
+      setMovements(backup);
       window.alert("No se pudo borrar el movimiento.");
     }
   }
@@ -276,7 +313,7 @@ export default function App() {
         <header className="hero">
           <div>
             <h1>Finanzas Familiares</h1>
-            <p>Una sola base: Supabase funcionando, UI prolija y lista para seguir con presupuesto, deudas y reportes.</p>
+            <p>Vista integral de la app: movimientos reales en Supabase y estructura completa para evaluar diseño, reportes, presupuesto, deudas y metas.</p>
           </div>
           <div className="hero-right">
             <select className="control control-compact" value={displayCurrency} onChange={(e) => setDisplayCurrency(e.target.value)}>
@@ -302,11 +339,19 @@ export default function App() {
           ))}
         </nav>
 
+        <section className="hero-strip">
+          <Stat title="USD blue" value={money(blueRate, "ARS")} note={blueLabel} />
+          <Stat title="Ingresos" value={formatDisplay(summary.income, displayCurrency, blueRate)} note="Mes filtrado" />
+          <Stat title="Gastos" value={formatDisplay(summary.expenses, displayCurrency, blueRate)} note="Mes filtrado" />
+          <Stat title="Ahorro" value={formatDisplay(summary.savings, displayCurrency, blueRate)} note="Mes filtrado" />
+          <Stat title="Neto" value={formatDisplay(summary.net, displayCurrency, blueRate)} note="Mes filtrado" />
+        </section>
+
         {activeTab === "cargar" && (
           <section className="panel">
             <div className="panel-header">
               <h2>Carga rápida</h2>
-              <span className="panel-note">Pensada para celular</span>
+              <span className="panel-note">Uso diario</span>
             </div>
 
             <div className="grid-form">
@@ -327,7 +372,7 @@ export default function App() {
               <Field label="Categoría">
                 <select className="control" value={movementForm.category} onChange={(e) => setMovementForm({ ...movementForm, category: e.target.value })} disabled={!movementForm.type}>
                   <option value="">Seleccionar</option>
-                  {categoriesForType.map((c) => <option key={c} value={c}>{c}</option>)}
+                  {(movementForm.type ? CATEGORY_MAP[movementForm.type] || [] : []).map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </Field>
               <Field label="Moneda">
@@ -350,7 +395,7 @@ export default function App() {
             </div>
 
             <div className="info-box">
-              Sigue guardando en Supabase. El próximo paso será reemplazar el dólar actual por cotización histórica por fecha y sumar presupuesto y deudas conectadas.
+              Esta carga sigue usando Supabase. El dólar histórico por fecha todavía no está resuelto; lo que ves es solo para poder evaluar el diseño integral completo.
             </div>
 
             <button className="primary-btn" onClick={handleSaveMovement} disabled={savingMovement}>
@@ -362,26 +407,17 @@ export default function App() {
         )}
 
         {activeTab === "dashboard" && (
-          <>
-            <section className="stats-grid">
-              <Stat title="Ingresos" value={formatDisplay(summary.income, displayCurrency, blueRate)} />
-              <Stat title="Gastos" value={formatDisplay(summary.expenses, displayCurrency, blueRate)} />
-              <Stat title="Ahorro" value={formatDisplay(summary.savings, displayCurrency, blueRate)} />
-              <Stat title="Inversión" value={formatDisplay(summary.investments, displayCurrency, blueRate)} />
-              <Stat title="Neto" value={formatDisplay(summary.net, displayCurrency, blueRate)} />
-            </section>
-
+          <div className="stack">
             <section className="panel">
               <div className="panel-header">
                 <h2>Gasto por categoría</h2>
-                <span className="panel-note">Importe y porcentaje</span>
+                <span className="panel-note">Importe + %</span>
               </div>
-
-              {categoryRows.length === 0 ? (
+              {expenseByCategory.length === 0 ? (
                 <div className="empty-state">Todavía no hay egresos para el mes filtrado.</div>
               ) : (
                 <div className="bars-list">
-                  {categoryRows.map((row) => (
+                  {expenseByCategory.map((row) => (
                     <div key={row.category} className="bar-item">
                       <div className="bar-head">
                         <strong>{row.category}</strong>
@@ -395,11 +431,35 @@ export default function App() {
                 </div>
               )}
             </section>
-          </>
+
+            <section className="panel">
+              <div className="panel-header">
+                <h2>Gasto por persona</h2>
+                <span className="panel-note">Comparativa rápida</span>
+              </div>
+              {spendingByPerson.length === 0 ? (
+                <div className="empty-state">Todavía no hay egresos para el mes filtrado.</div>
+              ) : (
+                <div className="bars-list">
+                  {spendingByPerson.map((row) => (
+                    <div key={row.person} className="bar-item">
+                      <div className="bar-head">
+                        <strong>{row.person}</strong>
+                        <span>{formatDisplay(row.amountArs, displayCurrency, blueRate)} · {row.pct.toFixed(1)}%</span>
+                      </div>
+                      <div className="bar-track">
+                        <div className="bar-fill alt" style={{ width: `${Math.max(6, row.pct)}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
         )}
 
         {activeTab === "datos" && (
-          <>
+          <div className="stack">
             <section className="panel">
               <div className="panel-header">
                 <h2>Filtros</h2>
@@ -511,13 +571,122 @@ export default function App() {
                 </>
               )}
             </section>
-          </>
+          </div>
         )}
 
-        {activeTab === "presupuesto" && <Placeholder title="Presupuesto" text="Lo dejamos para el bloque siguiente, sin tocar la base visual actual." />}
-        {activeTab === "deudas" && <Placeholder title="Deudas" text="Lo dejamos para el bloque siguiente, ya conectado a la estructura real del proyecto." />}
-        {activeTab === "metas" && <Placeholder title="Metas" text="Lo dejamos para el bloque siguiente, manteniendo esta UI y Supabase intactos." />}
-        {activeTab === "config" && <Placeholder title="Config." text="Lo dejamos para el bloque siguiente. Primero consolidamos la base visual y los datos." />}
+        {activeTab === "presupuesto" && (
+          <section className="panel">
+            <div className="panel-header">
+              <h2>Presupuesto</h2>
+              <span className="panel-note">Preview funcional</span>
+            </div>
+
+            <div className="budget-grid">
+              {budgets.map((b) => (
+                <div key={b.id} className="budget-card">
+                  <div className="budget-top">
+                    <strong>{b.category}</strong>
+                    <span>{b.person}</span>
+                  </div>
+                  <div className="budget-values">
+                    <div><span>Presupuesto</span><strong>{formatDisplay(b.plannedArs, displayCurrency, blueRate)}</strong></div>
+                    <div><span>Real</span><strong>{formatDisplay(b.actualArs, displayCurrency, blueRate)}</strong></div>
+                    <div><span>Diferencia</span><strong className={b.diffArs < 0 ? "text-red" : "text-green"}>{formatDisplay(b.diffArs, displayCurrency, blueRate)}</strong></div>
+                    <div><span>Ejecución</span><strong>{b.execution.toFixed(1)}%</strong></div>
+                  </div>
+                  <div className="bar-track">
+                    <div className={`bar-fill ${b.execution > 100 ? "danger" : b.execution >= 85 ? "warning" : ""}`} style={{ width: `${Math.min(100, b.execution)}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {activeTab === "deudas" && (
+          <section className="panel">
+            <div className="panel-header">
+              <h2>Deudas</h2>
+              <span className="panel-note">Preview visual</span>
+            </div>
+            <div className="debt-grid">
+              {SAMPLE_DEBTS.map((d) => (
+                <div key={d.id} className="debt-card">
+                  <div className="budget-top">
+                    <strong>{d.name}</strong>
+                    <span>{d.owner}</span>
+                  </div>
+                  <div className="budget-values">
+                    <div><span>Saldo</span><strong>{formatDisplay(d.balanceArs, displayCurrency, blueRate)}</strong></div>
+                    <div><span>Cuota</span><strong>{formatDisplay(d.installmentArs, displayCurrency, blueRate)}</strong></div>
+                    <div><span>Vence</span><strong>Día {d.dueDay}</strong></div>
+                    <div><span>Prioridad</span><strong>{d.priority}</strong></div>
+                  </div>
+                  <div className="bar-track">
+                    <div className="bar-fill alt" style={{ width: `${d.paidPct}%` }} />
+                  </div>
+                  <small className="muted-note">Avance cancelado: {d.paidPct}%</small>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {activeTab === "metas" && (
+          <section className="panel">
+            <div className="panel-header">
+              <h2>Metas</h2>
+              <span className="panel-note">Preview visual</span>
+            </div>
+            <div className="goal-grid">
+              {SAMPLE_GOALS.map((g) => {
+                const pct = g.targetArs > 0 ? (g.currentArs / g.targetArs) * 100 : 0;
+                return (
+                  <div key={g.id} className="goal-card">
+                    <div className="budget-top">
+                      <strong>{g.name}</strong>
+                      <span>{pct.toFixed(1)}%</span>
+                    </div>
+                    <div className="budget-values two">
+                      <div><span>Actual</span><strong>{formatDisplay(g.currentArs, displayCurrency, blueRate)}</strong></div>
+                      <div><span>Objetivo</span><strong>{formatDisplay(g.targetArs, displayCurrency, blueRate)}</strong></div>
+                    </div>
+                    <div className="bar-track">
+                      <div className="bar-fill" style={{ width: `${Math.min(100, pct)}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {activeTab === "config" && (
+          <section className="panel">
+            <div className="panel-header">
+              <h2>Config.</h2>
+              <span className="panel-note">Base editable futura</span>
+            </div>
+            <div className="config-grid">
+              <div className="config-card">
+                <strong>Personas</strong>
+                <ul>{PEOPLE.map((x) => <li key={x}>{x}</li>)}</ul>
+              </div>
+              <div className="config-card">
+                <strong>Medios de pago</strong>
+                <ul>{PAYMENT_METHODS.map((x) => <li key={x}>{x}</li>)}</ul>
+              </div>
+              <div className="config-card">
+                <strong>Tipos</strong>
+                <ul>{TYPES.map((x) => <li key={x}>{x}</li>)}</ul>
+              </div>
+              <div className="config-card">
+                <strong>Categorías</strong>
+                <ul>{Object.entries(CATEGORY_MAP).map(([k, arr]) => <li key={k}><b>{k}:</b> {arr.join(", ")}</li>)}</ul>
+              </div>
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );
