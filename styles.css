@@ -1,11 +1,20 @@
-/* Agregar al final de styles.css */
-.kpi-compact .stat-card { padding: 14px; }
-.stat-topline { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
-.stat-label-inline { font-size: .82rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
-.filter-grid.six-col { grid-template-columns: repeat(6, 1fr); }
-.budget-row.budget-good { border-color: #bbf7d0; background: var(--green-light); }
-@media (max-width: 1100px) { .filter-grid.six-col { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 700px) {
-  .filter-grid.six-col { grid-template-columns: 1fr; }
-  .kpi-compact { grid-template-columns: repeat(2, 1fr); }
+/* ── Stats ── */
+.stats-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+.stat-card {
+  display: flex; flex-direction: column; gap: 8px;
+  border-radius: var(--radius); padding: 14px 16px; border: 1px solid var(--border);
+  background: var(--surface); box-shadow: var(--shadow);
 }
+.stat-card.stat-green { border-left: 4px solid var(--green); }
+.stat-card.stat-red { border-left: 4px solid var(--red); }
+.stat-card.stat-blue { border-left: 4px solid var(--primary); }
+.stat-card.stat-purple { border-left: 4px solid var(--purple); }
+.stat-card.stat-amber { border-left: 4px solid var(--amber); }
+
+.stat-card-head { display: flex; align-items: center; gap: 8px; }
+.stat-icon { font-size: 1.3rem; line-height: 1; }
+.stat-label { 
+  font-size: 0.78rem; font-weight: 700; color: var(--muted); 
+  text-transform: uppercase; letter-spacing: 0.03em; margin: 0;
+}
+.stat-value { font-size: 1.25rem; font-weight: 800; }
