@@ -864,12 +864,17 @@ export default function App() {
               <Card>
                 <CardHead title={`Saldo del mes · ${reportMonth}`} icon="🗓️" />
                 <div className="balance-grid">
-                  <div className="balance-row"><span>Saldo inicial</span><strong>{fmtArs(monthBalance.opening)}</strong></div>
-                  <div className="balance-row green"><span>＋ Ingresos</span><strong>{fmtArs(monthBalance.inc)}</strong></div>
-                  <div className="balance-row red"><span>− Gastos</span><strong>{fmtArs(monthBalance.exp)}</strong></div>
-                  <div className="balance-row amber"><span>− Ahorro</span><strong>{fmtArs(monthBalance.sav)}</strong></div>
-                  <div className="balance-row purple"><span>− Inversión</span><strong>{fmtArs(monthBalance.inv)}</strong></div>
-                  <div className="balance-row total"><span>= Saldo final</span><strong>{fmtArs(monthBalance.closing)}</strong></div>
+                  {(() => {
+                    const cvt = (v) => displayCurrency === "USD" ? fmt(v / Math.max(blueRate, 1)) : fmtArs(v);
+                    return (<>
+                      <div className="balance-row"><span>Saldo inicial</span><strong>{cvt(monthBalance.opening)}</strong></div>
+                      <div className="balance-row green"><span>＋ Ingresos</span><strong>{cvt(monthBalance.inc)}</strong></div>
+                      <div className="balance-row red"><span>− Gastos</span><strong>{cvt(monthBalance.exp)}</strong></div>
+                      <div className="balance-row amber"><span>− Ahorro</span><strong>{cvt(monthBalance.sav)}</strong></div>
+                      <div className="balance-row purple"><span>− Inversión</span><strong>{cvt(monthBalance.inv)}</strong></div>
+                      <div className="balance-row total"><span>= Saldo final</span><strong>{cvt(monthBalance.closing)}</strong></div>
+                    </>);
+                  })()}
                 </div>
               </Card>
               <Card>
@@ -943,6 +948,52 @@ export default function App() {
                     })}
                   </tbody>
                 </table>
+                {filteredMovements.length === 0 && <EmptyState msg="No hay movimientos con esos filtros." />}
+              </div>
+              {/* Mobile cards — visible below 780px via CSS */}
+              <div className="cards-mobile">
+                {filteredMovements.map((m) => {
+                  const isEditing = editingMovId === m.id;
+                  const isClosed = monthlyBalances.find((b) => b.balance_month === monthKey(m.date) && b.closed);
+                  return (
+                    <div key={m.id} className="mov-card">
+                      <div className="mov-card-head">
+                        <div>
+                          <Badge color={m.type === "Ingreso" ? "green" : m.type === "Egreso" ? "red" : m.type === "Ahorro" ? "blue" : "purple"}>{m.type}</Badge>
+                          <span style={{ marginLeft: 8, fontWeight: 700 }}>{m.category}</span>
+                          {m.type === "Egreso" && <Badge color={getFV(m.type, m.category) === "F" ? "red" : "amber"} style={{ marginLeft: 6 }}>{getFV(m.type, m.category)}</Badge>}
+                        </div>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          {!isClosed && (isEditing
+                            ? <>
+                                <button className="del-btn" style={{ borderColor: "#bbf7d0", color: "#16a34a" }} onClick={() => saveEditMovement(m.id)}>✓</button>
+                                <button className="del-btn" onClick={() => setEditingMovId(null)}>✕</button>
+                              </>
+                            : <button className="del-btn" style={{ borderColor: "#bfdbfe", color: "#1e40af" }} onClick={() => { setEditingMovId(m.id); setEditMovData({ originalAmount: String(m.originalAmount), description: m.description || "" }); }}>✏</button>
+                          )}
+                          {!isClosed && <button className="del-btn" onClick={() => deleteMovement(m.id)}>🗑</button>}
+                          {isClosed && <span className="muted small">🔒</span>}
+                        </div>
+                      </div>
+                      <div className="mov-card-amounts">
+                        <div><span className="muted small">Fecha</span><div>{m.date}</div></div>
+                        <div><span className="muted small">Persona</span><div>{m.person}</div></div>
+                        <div><span className="muted small">{m.currency === "USD" ? "USD" : "ARS"}</span>
+                          <div className="fw">
+                            {isEditing
+                              ? <Input type="number" value={editMovData.originalAmount} onChange={(e) => setEditMovData((d) => ({ ...d, originalAmount: e.target.value }))} />
+                              : money(m.originalAmount, m.currency)}
+                          </div>
+                        </div>
+                        <div><span className="muted small">ARS</span><div className="fw">{fmtArs(m.amountArs)}</div></div>
+                      </div>
+                      {isEditing && (
+                        <Input value={editMovData.description} onChange={(e) => setEditMovData((d) => ({ ...d, description: e.target.value }))} placeholder="Descripción" />
+                      )}
+                      {!isEditing && m.description && <div className="muted small">{m.description}</div>}
+                    </div>
+                  );
+                })}
                 {filteredMovements.length === 0 && <EmptyState msg="No hay movimientos con esos filtros." />}
               </div>
             </Card>
