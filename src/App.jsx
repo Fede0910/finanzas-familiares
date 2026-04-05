@@ -248,7 +248,7 @@ export default function App() {
 
   const [movForm, setMovForm] = useState(emptyMovForm());
   const [debtForm, setDebtForm] = useState({ name: "", owner: "Compartido", balance: "", installment: "", dueDay: "", priority: "Media", rate: "", notes: "" });
-  const [goalForm, setGoalForm] = useState({ name: "", owner: "Compartido", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
+  const [goalForm, setGoalForm] = useState({ name: categoryMap["Ahorro"]?.[0] || "", owner: "Compartido", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
   const [budgetForm, setBudgetForm] = useState({ month: currentMonth(), person: "Compartido", type: "Egreso", category: "Supermercado", planned: "" });
   const [debtPayForm, setDebtPayForm] = useState({ debtId: "", date: today(), amount: "", person: "Compartido", notes: "" });
   const [balanceForm, setBalanceForm] = useState({ month: currentMonth(), opening: "", notes: "" });
@@ -491,7 +491,7 @@ export default function App() {
     }]).select().single();
     if (error) { console.error(error); return; }
     if (data) setGoals((prev) => [data, ...prev]);
-    setGoalForm({ name: "", owner: "Compartido", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
+    setGoalForm({ name: (categoryMap["Ahorro"] || [])[0] || "", owner: "Compartido", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
   }
   async function deleteGoal(id) {
     await supabase.from("goals").delete().eq("id", id);
@@ -1090,8 +1090,8 @@ export default function App() {
                               <div className="budget-inline-bar-fill" style={{ width: `${pct}%`, background: barColor }} />
                             </div>
                             <div className="budget-inline-nums">
-                              <span className="muted small">{fmt(b.actual)} / {fmt(b.planned)}</span>
-                              <span className="muted small">{b.difference >= 0 ? "+" : ""}{fmt(b.difference)}</span>
+                              <span className="muted small">{fmt(displayCurrency === "USD" ? b.actual/Math.max(blueRate,1) : b.actual)} / {fmt(displayCurrency === "USD" ? b.planned/Math.max(blueRate,1) : b.planned)}</span>
+                              <span className="muted small">{b.difference >= 0 ? "+" : ""}{fmt(displayCurrency === "USD" ? b.difference/Math.max(blueRate,1) : b.difference)}</span>
                             </div>
                           </div>
                           <div className="budget-inline-right">
@@ -1108,11 +1108,11 @@ export default function App() {
 
             <Card>
               <CardHead title="Crear meta" icon="⭐" />
-              <InfoBox color="blue">💡 Si el nombre de la meta coincide con una categoría de Ahorro o Inversión, los movimientos de esa categoría se acumularán automáticamente sin necesidad de vinculación manual.</InfoBox>
+              <InfoBox color="blue">💡 El nombre de la meta es la categoría — así los movimientos de esa categoría se acumulan automáticamente.</InfoBox>
               <div className="form-grid" style={{ marginTop: 12 }}>
-                <Field label="Nombre"><Input value={goalForm.name} onChange={(e) => setGoalForm({ ...goalForm, name: e.target.value })} /></Field>
+                <Field label="Tipo"><Select value={goalForm.goalType} onChange={(v) => setGoalForm({ ...goalForm, goalType: v, name: (categoryMap[v] || [])[0] || "" })}><option value="Ahorro">Ahorro</option><option value="Inversión">Inversión</option></Select></Field>
+                <Field label="Categoría (= nombre de meta)"><Select value={goalForm.name} onChange={(v) => setGoalForm({ ...goalForm, name: v })}><option value="">Seleccionar…</option>{(categoryMap[goalForm.goalType] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
                 <Field label="Responsable"><Select value={goalForm.owner} onChange={(v) => setGoalForm({ ...goalForm, owner: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
-                <Field label="Tipo"><Select value={goalForm.goalType} onChange={(v) => setGoalForm({ ...goalForm, goalType: v })}><option value="Ahorro">Ahorro</option><option value="Inversión">Inversión</option></Select></Field>
                 <Field label="Periodicidad"><Select value={goalForm.periodType} onChange={(v) => setGoalForm({ ...goalForm, periodType: v })}><option value="Mensual">Mensual</option><option value="Anual">Anual</option></Select></Field>
                 <Field label="Objetivo (ARS)"><Input type="number" value={goalForm.target} onChange={(e) => setGoalForm({ ...goalForm, target: e.target.value })} /></Field>
                 <Field label="Notas"><Input value={goalForm.notes} onChange={(e) => setGoalForm({ ...goalForm, notes: e.target.value })} /></Field>
@@ -1137,8 +1137,8 @@ export default function App() {
                         <div className="budget-inline-bar-fill" style={{ width: `${pct}%`, background: barColor }} />
                       </div>
                       <div className="budget-inline-nums">
-                        <span className="muted small">{fmtArs(g.currentArs)} / {fmtArs(g.target_amount || 0)}</span>
-                        <span className="muted small">Faltan {fmtArs(Math.max(0, (g.target_amount || 0) - g.currentArs))}</span>
+                        <span className="muted small">{fmt(displayCurrency === "USD" ? g.currentArs / Math.max(blueRate,1) : g.currentArs)} / {fmt(displayCurrency === "USD" ? (g.target_amount||0) / Math.max(blueRate,1) : (g.target_amount||0))}</span>
+                        <span className="muted small">Faltan {fmt(displayCurrency === "USD" ? Math.max(0,(g.target_amount||0)-g.currentArs)/Math.max(blueRate,1) : Math.max(0,(g.target_amount||0)-g.currentArs))}</span>
                       </div>
                     </div>
                     <div className="budget-inline-right">
