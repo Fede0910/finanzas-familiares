@@ -202,7 +202,44 @@ function PieChart({ data, nameKey, valueKey, formatter }) {
   );
 }
 
-const TABS = [
+function HorizontalBarChart({ data, formatter }) {
+  // data: [{ label, real, budget, person }]
+  if (!data.length) return <EmptyState msg="Sin presupuestos para mostrar" />;
+  const maxVal = Math.max(...data.flatMap((d) => [d.real, d.budget]), 1);
+  const rowH = 36, PL = 130, PR = 10, PT = 10, barH = 11, gap = 4;
+  const W = 560;
+  const H = PT + data.length * rowH + 30;
+  return (
+    <div className="chart-wrap">
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto" }}>
+        {data.map((d, i) => {
+          const y = PT + i * rowH;
+          const bw = ((d.budget || 0) / maxVal) * (W - PL - PR);
+          const rw = ((d.real || 0) / maxVal) * (W - PL - PR);
+          const over = d.budget > 0 && d.real > d.budget;
+          return (
+            <g key={i}>
+              <text x={PL - 6} y={y + barH + gap + 2} textAnchor="end" fontSize="10" fill="#475569">{d.label}</text>
+              {/* budget bar (background) */}
+              <rect x={PL} y={y} width={Math.max(bw, 2)} height={barH} fill="#e2e8f0" rx="3" />
+              {/* real bar */}
+              <rect x={PL} y={y + barH + gap} width={Math.max(rw, 2)} height={barH} fill={over ? "#dc2626" : "#2563eb"} rx="3" />
+              {/* values */}
+              {d.budget > 0 && <text x={PL + bw + 4} y={y + barH - 2} fontSize="9" fill="#64748b">{formatter ? formatter(d.budget) : d.budget}</text>}
+              <text x={PL + rw + 4} y={y + barH + gap + barH - 2} fontSize="9" fill={over ? "#dc2626" : "#2563eb"}>{formatter ? formatter(d.real) : d.real}</text>
+            </g>
+          );
+        })}
+        {/* legend */}
+        <g transform={`translate(${PL}, ${H - 16})`}>
+          <rect width="10" height="10" fill="#e2e8f0" rx="2" /><text x="14" y="9" fontSize="10" fill="#475569">Presupuestado</text>
+          <rect x="120" width="10" height="10" fill="#2563eb" rx="2" /><text x="134" y="9" fontSize="10" fill="#475569">Real</text>
+          <rect x="190" width="10" height="10" fill="#dc2626" rx="2" /><text x="204" y="9" fontSize="10" fill="#475569">Excedido</text>
+        </g>
+      </svg>
+    </div>
+  );
+}
   { id: "cargar", label: "📥 Cargar" },
   { id: "dashboard", label: "📊 Dashboard" },
   { id: "datos", label: "🗂 Datos" },
@@ -239,7 +276,8 @@ export default function App() {
 
   const [reportMonth, setReportMonth] = useState(currentMonth());
   const [selectedPerson, setSelectedPerson] = useState("all");
-  const [filters, setFilters] = useState({ type: "all", category: "all", month: currentMonth(), currency: "all", fv: "all" });
+  const [filters, setFilters] = useState({ type: "all", category: "all", dateFrom: currentMonth() + "-01", dateTo: today(), currency: "all", fv: "all" });
+  const [expandedTypes, setExpandedTypes] = useState({});
 
   const emptyMovForm = useCallback(() => ({
     date: today(), person: "Compartido", type: "", category: "", description: "", originalAmount: "", currency: "ARS",
@@ -665,7 +703,8 @@ export default function App() {
       if (filters.type !== "all" && m.type !== filters.type) return false;
       if (filters.category !== "all" && m.category !== filters.category) return false;
       if (filters.currency !== "all" && m.currency !== filters.currency) return false;
-      if (filters.month && monthKey(m.date) !== filters.month) return false;
+      if (filters.dateFrom && m.date < filters.dateFrom) return false;
+      if (filters.dateTo && m.date > filters.dateTo) return false;
       if (filters.fv !== "all" && (m.type !== "Egreso" || getFV(m.type, m.category) !== filters.fv)) return false;
       return true;
     });
@@ -695,7 +734,7 @@ export default function App() {
       m.date, m.person, m.type, m.category, m.type === "Egreso" ? getFV(m.type, m.category) : "", m.description || "",
       m.currency, m.originalAmount, m.fxRate, Number(m.amountArs || 0).toFixed(2), Number(m.amountUsd || 0).toFixed(2),
     ]);
-    downloadCSV([headers, ...rows], `movimientos_${filters.month || "todos"}`);
+    downloadCSV([headers, ...rows], `movimientos_${filters.dateFrom}_${filters.dateTo}`);
   }
 
   function exportSection(section) {
@@ -712,8 +751,21 @@ export default function App() {
       headers = ["Nombre","Responsable","Tipo","Periodicidad","Objetivo","Actual","Pendiente","% Avance"];
       rows = goalProgress.map((g) => [g.name, g.owner, g.goal_type, g.period_type, g.target_amount || 0, g.currentArs.toFixed(2), Math.max(0, (g.target_amount || 0) - g.currentArs).toFixed(2), g.pct.toFixed(1) + "%"]);
       filename = `metas_${reportMonth}`;
+    } else if (section === "desviaciones") {
+      // Build deviation report: for each budget in the period, show real vs planned
+      const months = new Set(filteredMovements.map((m) => monthKey(m.date)));
+      const desvRows = [];
+      budgets.filter((b) => months.has(b.month) && (selectedPerson === "all" || b.person === selectedPerson)).forEach((b) => {
+        const actual = filteredMovements.filter((m) => monthKey(m.date) === b.month && m.person === b.person && m.type === b.type && m.category === b.category).reduce((a, c) => a + c.amountArs, 0);
+        const diff = b.planned - actual;
+        const exec = b.planned > 0 ? (actual / b.planned * 100).toFixed(1) + "%" : "—";
+        desvRows.push([b.month, b.person, b.type, b.category, b.planned.toFixed(2), actual.toFixed(2), diff.toFixed(2), exec]);
+      });
+      headers = ["Mes","Persona","Tipo","Categoría","Presupuestado","Real","Diferencia","% Ejecución"];
+      rows = desvRows;
+      filename = `desviaciones_${filters.dateFrom}_${filters.dateTo}`;
     }
-    downloadCSV([headers, ...rows], filename);
+    if (headers && rows && filename) downloadCSV([headers, ...rows], filename);
   }
 
   function downloadCSV(data, filename) {
@@ -787,7 +839,13 @@ export default function App() {
               </Select>
             </Field>
             <Field label="Mes global">
-              <Input type="month" value={reportMonth} onChange={(e) => { setReportMonth(e.target.value); setFilters((f) => ({ ...f, month: e.target.value })); }} />
+              <Input type="month" value={reportMonth} onChange={(e) => {
+                const m = e.target.value;
+                setReportMonth(m);
+                const [y, mo] = m.split("-").map(Number);
+                const lastDay = new Date(y, mo, 0).getDate();
+                setFilters((f) => ({ ...f, dateFrom: `${m}-01`, dateTo: `${m}-${String(lastDay).padStart(2,"0")}` }));
+              }} />
             </Field>
             <Field label="Visualización">
               <Select value={displayCurrency} onChange={setDisplayCurrency}>
@@ -821,6 +879,11 @@ export default function App() {
               </div>
               {selectedDebtForMov && movForm.category === "Deuda" && <InfoBox color="blue">Cuota sugerida: <strong>{fmtArs(selectedDebtForMov.installment)}</strong> · Saldo pendiente: <strong>{fmtArs(selectedDebtForMov.balance)}</strong>.</InfoBox>}
               {movForm.currency === "USD" && <InfoBox color="amber">Cotización blue del momento: <strong>{money(blueRate)}</strong> por USD · Importe en ARS: <strong>{money(toArs(movForm.originalAmount || 0, "USD", blueRate))}</strong></InfoBox>}
+              {movForm.type && movForm.category && (movForm.type === "Egreso" || movForm.type === "Ingreso") && (() => {
+                const monthMov = monthKey(movForm.date);
+                const hasBudget = budgets.some((b) => b.month === monthMov && b.person === movForm.person && b.type === movForm.type && b.category === movForm.category);
+                return !hasBudget ? <InfoBox color="amber">⚠️ No hay presupuesto cargado para <strong>{movForm.category}</strong> · {movForm.person} en {monthMov}. Podés cargarlo en la pestaña Presupuesto.</InfoBox> : null;
+              })()}
               <div style={{ marginTop: 16 }}><Btn onClick={addMovement} disabled={saving || !movForm.type || !movForm.category || !movForm.originalAmount}>{saving ? "Guardando…" : "＋ Agregar movimiento"}</Btn></div>
             </Card>
           </div>
@@ -862,12 +925,55 @@ export default function App() {
                 <div className="balance-grid">
                   {(() => {
                     const cvt = (v) => displayCurrency === "USD" ? fmt(v / Math.max(blueRate, 1)) : fmtArs(v);
+                    const types4 = [
+                      { key: "Ingreso", label: "＋ Ingresos", val: monthBalance.inc, cls: "green", icon: "💵" },
+                      { key: "Egreso",  label: "− Gastos",    val: monthBalance.exp, cls: "red",   icon: "💸" },
+                      { key: "Ahorro",  label: "− Ahorro",    val: monthBalance.sav, cls: "amber", icon: "🐷" },
+                      { key: "Inversión",label:"− Inversión", val: monthBalance.inv, cls: "",      icon: "📈" },
+                    ];
                     return (<>
                       <div className="balance-row"><span>Saldo inicial</span><strong>{cvt(monthBalance.opening)}</strong></div>
-                      <div className="balance-row green"><span>＋ Ingresos</span><strong>{cvt(monthBalance.inc)}</strong></div>
-                      <div className="balance-row red"><span>− Gastos</span><strong>{cvt(monthBalance.exp)}</strong></div>
-                      <div className="balance-row amber"><span>− Ahorro</span><strong>{cvt(monthBalance.sav)}</strong></div>
-                      <div className="balance-row purple"><span>− Inversión</span><strong>{cvt(monthBalance.inv)}</strong></div>
+                      {types4.map(({ key, label, val, cls, icon }) => {
+                        const budgeted = budgets.filter((b) => b.month === reportMonth && b.type === key && (selectedPerson === "all" || b.person === selectedPerson)).reduce((a, b) => a + b.planned, 0);
+                        const isExpanded = expandedTypes[key];
+                        const catBreakdown = (() => {
+                          const bucket = {};
+                          personMovements.filter((m) => monthKey(m.date) === reportMonth && m.type === key).forEach((m) => {
+                            bucket[m.category] = (bucket[m.category] || 0) + m.amountArs;
+                          });
+                          return Object.entries(bucket).sort((a, b) => b[1] - a[1]);
+                        })();
+                        return (
+                          <div key={key}>
+                            <div
+                              className={`balance-row ${cls}`}
+                              style={{ cursor: "pointer", userSelect: "none" }}
+                              onClick={() => setExpandedTypes((p) => ({ ...p, [key]: !p[key] }))}
+                            >
+                              <span>{label} {catBreakdown.length > 0 ? (isExpanded ? "▲" : "▼") : ""}</span>
+                              <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+                                {budgeted > 0 && <span className="muted small">presup. {cvt(budgeted)}</span>}
+                                <strong>{cvt(val)}</strong>
+                                {budgeted > 0 && <span style={{ fontSize: "0.78rem", fontWeight: 700, color: (key === "Egreso" && val > budgeted) ? "var(--red)" : (key !== "Egreso" && val < budgeted) ? "var(--amber)" : "var(--green)" }}>
+                                  {key === "Egreso" ? (val > budgeted ? "▲" : "✓") : (val >= budgeted ? "✓" : "▲")} {cvt(Math.abs(val - budgeted))}
+                                </span>}
+                              </div>
+                            </div>
+                            {isExpanded && catBreakdown.map(([cat, amt]) => {
+                              const catBudget = budgets.filter((b) => b.month === reportMonth && b.type === key && b.category === cat && (selectedPerson === "all" || b.person === selectedPerson)).reduce((a, b) => a + b.planned, 0);
+                              return (
+                                <div key={cat} className="balance-row" style={{ paddingLeft: 24, fontSize: "0.88rem", background: "#f8fafc" }}>
+                                  <span className="muted">{cat}</span>
+                                  <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                                    {catBudget > 0 && <span className="muted small">{cvt(catBudget)}</span>}
+                                    <span className="fw">{cvt(amt)}</span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
                       <div className="balance-row total"><span>= Saldo final</span><strong>{cvt(monthBalance.closing)}</strong></div>
                     </>);
                   })()}
@@ -892,13 +998,17 @@ export default function App() {
             <Card>
               <CardHead title="Filtros" icon="🔍" />
               <div className="filter-grid">
-                <Field label="Mes"><Input type="month" value={filters.month} onChange={(e) => setFilters({ ...filters, month: e.target.value })} /></Field>
+                <Field label="Desde"><Input type="date" value={filters.dateFrom} onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })} /></Field>
+                <Field label="Hasta"><Input type="date" value={filters.dateTo} onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })} /></Field>
                 <Field label="Tipo"><Select value={filters.type} onChange={(v) => setFilters({ ...filters, type: v })}><option value="all">Todos</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
                 <Field label="Categoría"><Select value={filters.category} onChange={(v) => setFilters({ ...filters, category: v })}><option value="all">Todas</option>{Object.values(categoryMap).flat().map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
-                <Field label="Moneda"><Select value={filters.currency} onChange={(v) => setFilters({ ...filters, currency: v })}><option value="all">Todas</option><option value="ARS">ARS</option><option value="USD">USD</option></Select></Field>
                 <Field label="F/V"><Select value={filters.fv} onChange={(v) => setFilters({ ...filters, fv: v })}><option value="all">Todos</option><option value="F">Fijos</option><option value="V">Variables</option></Select></Field>
               </div>
-              <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}><Btn onClick={exportCSV} variant="outline">⬇ Exportar movimientos</Btn><span className="muted small" style={{ alignSelf: "center" }}>{filteredMovements.length} registros</span></div>
+              <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Btn onClick={exportCSV} variant="outline">⬇ Exportar movimientos</Btn>
+                <Btn onClick={() => exportSection("desviaciones")} variant="outline">⬇ Exportar desviaciones</Btn>
+                <span className="muted small" style={{ alignSelf: "center" }}>{filteredMovements.length} registros</span>
+              </div>
             </Card>
             <Card>
               <div className="table-wrap">
@@ -1161,6 +1271,17 @@ export default function App() {
                 {monthlyByPerson.map((r) => <div key={r.person} className="report-row"><div>{r.person}</div><strong>{fmt(r.total)} · {(r.pct * 100).toFixed(1)}%</strong></div>)}
               </Card>
             </div>
+            <Card>
+              <CardHead title={`Presupuesto vs Real por categoría · ${reportMonth}`} icon="🎯" />
+              {(() => {
+                const chartData = budgetComparison.map((b) => ({
+                  label: `${b.category} (${b.person})`,
+                  budget: displayCurrency === "USD" ? b.planned / Math.max(blueRate, 1) : b.planned,
+                  real: displayCurrency === "USD" ? b.actual / Math.max(blueRate, 1) : b.actual,
+                })).sort((a, b) => b.budget - a.budget);
+                return <HorizontalBarChart data={chartData} formatter={fmt} />;
+              })()}
+            </Card>
             <div className="two-col">
               <Card>
                 <CardHead title="Ingresos vs egresos" icon="📈" />
