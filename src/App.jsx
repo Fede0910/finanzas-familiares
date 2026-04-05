@@ -215,7 +215,6 @@ const TABS = [
 export default function App() {
   const [tab, setTab] = useState("cargar");
   const [people, setPeople] = useState(DEFAULT_PEOPLE);
-  const [paymentMethods] = useState(DEFAULT_PAYMENT_METHODS);
   const [types, setTypes] = useState(DEFAULT_TYPES);
   const [categoryRows, setCategoryRows] = useState(DEFAULT_CATEGORY_ROWS);
   const [categoryMap, setCategoryMap] = useState(buildCategoryMap(DEFAULT_CATEGORY_ROWS));
@@ -235,6 +234,8 @@ export default function App() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [editingMovId, setEditingMovId] = useState(null);
+  const [editMovData, setEditMovData] = useState({ originalAmount: "", description: "" });
 
   const [reportMonth, setReportMonth] = useState(currentMonth());
   const [selectedPerson, setSelectedPerson] = useState("all");
@@ -242,14 +243,14 @@ export default function App() {
 
   const emptyMovForm = useCallback(() => ({
     date: today(), person: "Compartido", type: "", category: "", description: "", originalAmount: "", currency: "ARS",
-    fxRate: blueRate, paymentMethod: paymentMethods[0] || "", linkedDebtId: "", linkedGoalId: "",
-  }), [blueRate, paymentMethods]);
+    fxRate: blueRate, linkedDebtId: "", linkedGoalId: "",
+  }), [blueRate]);
 
   const [movForm, setMovForm] = useState(emptyMovForm());
   const [debtForm, setDebtForm] = useState({ name: "", owner: "Compartido", balance: "", installment: "", dueDay: "", priority: "Media", rate: "", notes: "" });
   const [goalForm, setGoalForm] = useState({ name: "", owner: "Compartido", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
   const [budgetForm, setBudgetForm] = useState({ month: currentMonth(), person: "Compartido", type: "Egreso", category: "Supermercado", planned: "" });
-  const [debtPayForm, setDebtPayForm] = useState({ debtId: "", date: today(), amount: "", person: "Compartido", paymentMethod: "Banco", notes: "" });
+  const [debtPayForm, setDebtPayForm] = useState({ debtId: "", date: today(), amount: "", person: "Compartido", notes: "" });
   const [balanceForm, setBalanceForm] = useState({ month: currentMonth(), opening: "", notes: "" });
   const [catalogForm, setCatalogForm] = useState({ person: "", type: "", categoryType: "Egreso", category: "", categoryFv: "V" });
 
@@ -352,6 +353,18 @@ export default function App() {
     const amountUsd = movForm.currency === "USD" ? Number(movForm.originalAmount) : amountArs / Math.max(blueRate, 1);
     const selectedDebt = debts.find((d) => String(d.id) === String(movForm.linkedDebtId));
 
+    // Auto-link goal: if no explicit link, find a goal whose name matches the category (case-insensitive)
+    let linkedGoalId = movForm.linkedGoalId ? Number(movForm.linkedGoalId) : null;
+    if (!linkedGoalId && (movForm.type === "Ahorro" || movForm.type === "Inversión")) {
+      const autoGoal = goals.find((g) =>
+        g.active !== false &&
+        g.goal_type === movForm.type &&
+        (selectedPerson === "all" || g.owner === movForm.person || g.owner === "Compartido") &&
+        g.name.toLowerCase() === movForm.category.toLowerCase()
+      );
+      if (autoGoal) linkedGoalId = autoGoal.id;
+    }
+
     const row = {
       movement_date: movForm.date,
       person: movForm.person,
@@ -363,9 +376,9 @@ export default function App() {
       fx_rate: rate,
       amount_ars: amountArs,
       amount_usd: amountUsd,
-      payment_method: movForm.paymentMethod,
+      payment_method: null,
       linked_debt_id: movForm.linkedDebtId ? Number(movForm.linkedDebtId) : null,
-      linked_goal_id: movForm.linkedGoalId ? Number(movForm.linkedGoalId) : null,
+      linked_goal_id: linkedGoalId,
     };
 
     const { data, error } = await supabase.from("movements").insert([row]).select().single();
@@ -384,7 +397,7 @@ export default function App() {
         await supabase.from("debts").update({ current_balance: newBalance, total_paid: newPaid }).eq("id", selectedDebt.id);
         await supabase.from("debt_payments").insert([{
           debt_id: selectedDebt.id, payment_date: movForm.date, amount_ars: amountArs,
-          person: movForm.person, payment_method: movForm.paymentMethod,
+          person: movForm.person, payment_method: null,
           notes: movForm.description || "Pago desde egreso", linked_movement_id: data.id,
         }]);
         setDebts((prev) => prev.map((d) => d.id === selectedDebt.id ? { ...d, balance: newBalance, totalPaid: newPaid } : d));
@@ -397,6 +410,24 @@ export default function App() {
   async function deleteMovement(id) {
     await supabase.from("movements").delete().eq("id", id);
     setMovements((prev) => prev.filter((m) => m.id !== id));
+  }
+
+  async function saveEditMovement(id) {
+    const mov = movements.find((m) => m.id === id);
+    if (!mov) return;
+    const newAmount = Number(editMovData.originalAmount);
+    if (!newAmount) return;
+    const rate = mov.currency === "USD" ? mov.fxRate : 1;
+    const amountArs = mov.currency === "USD" ? newAmount * rate : newAmount;
+    const amountUsd = mov.currency === "USD" ? newAmount : amountArs / Math.max(blueRate, 1);
+    const { error } = await supabase.from("movements").update({
+      original_amount: newAmount, amount_ars: amountArs, amount_usd: amountUsd,
+      description: editMovData.description || null,
+    }).eq("id", id);
+    if (!error) {
+      setMovements((prev) => prev.map((m) => m.id === id ? { ...m, originalAmount: newAmount, amountArs, amountUsd, description: editMovData.description } : m));
+    }
+    setEditingMovId(null);
   }
 
   async function addDebt() {
@@ -434,21 +465,21 @@ export default function App() {
     await supabase.from("debts").update({ current_balance: newBalance, total_paid: newPaid }).eq("id", debt.id);
     const { data: dp } = await supabase.from("debt_payments").insert([{
       debt_id: debt.id, payment_date: debtPayForm.date, amount_ars: amount,
-      person: debtPayForm.person, payment_method: debtPayForm.paymentMethod, notes: debtPayForm.notes || null,
+      person: debtPayForm.person, payment_method: null, notes: debtPayForm.notes || null,
     }]).select().single();
     const { data: mov } = await supabase.from("movements").insert([{
       movement_date: debtPayForm.date, person: debtPayForm.person, type: "Egreso", category: "Deuda", description: `Pago deuda - ${debt.name}`,
       original_currency: "ARS", original_amount: amount, fx_rate: 1, amount_ars: amount, amount_usd: amount / Math.max(blueRate, 1),
-      payment_method: debtPayForm.paymentMethod, linked_debt_id: debt.id,
+      payment_method: null, linked_debt_id: debt.id,
     }]).select().single();
     setDebts((prev) => prev.map((d) => d.id === debt.id ? { ...d, balance: newBalance, totalPaid: newPaid } : d));
     if (dp) setDebtPayments((prev) => [{ id: dp.id, debtId: dp.debt_id, date: dp.payment_date, amount: dp.amount_ars, person: dp.person, paymentMethod: dp.payment_method, notes: dp.notes }, ...prev]);
     if (mov) setMovements((prev) => [{
       id: mov.id, date: mov.movement_date, person: mov.person, type: mov.type, category: mov.category, description: mov.description,
       originalAmount: mov.original_amount, currency: mov.original_currency, fxRate: mov.fx_rate, amountArs: mov.amount_ars,
-      amountUsd: mov.amount_usd, paymentMethod: mov.payment_method, linkedDebtId: mov.linked_debt_id, linkedGoalId: mov.linked_goal_id,
+      amountUsd: mov.amount_usd, paymentMethod: null, linkedDebtId: mov.linked_debt_id, linkedGoalId: mov.linked_goal_id,
     }, ...prev]);
-    setDebtPayForm({ debtId: "", date: today(), amount: "", person: "Compartido", paymentMethod: "Banco", notes: "" });
+    setDebtPayForm({ debtId: "", date: today(), amount: "", person: "Compartido", notes: "" });
     setSaving(false);
   }
 
@@ -643,9 +674,15 @@ export default function App() {
   const goalProgress = useMemo(() => {
     return personGoals.filter((g) => g.active !== false).map((g) => {
       const currentArs = personMovements.filter((m) => {
-        if (m.linkedGoalId !== g.id) return false;
-        if (g.period_type === "Anual") return m.date.slice(0, 4) === reportMonth.slice(0, 4);
-        return monthKey(m.date) === reportMonth;
+        const inPeriod = g.period_type === "Anual"
+          ? m.date.slice(0, 4) === reportMonth.slice(0, 4)
+          : monthKey(m.date) === reportMonth;
+        if (!inPeriod) return false;
+        // Direct link takes priority, otherwise auto-match by category name
+        if (m.linkedGoalId === g.id) return true;
+        if (!m.linkedGoalId && (m.type === "Ahorro" || m.type === "Inversión") &&
+            m.category.toLowerCase() === g.name.toLowerCase()) return true;
+        return false;
       }).reduce((a, b) => a + b.amountArs, 0);
       const pct = Number(g.target_amount || 0) > 0 ? (currentArs / Number(g.target_amount)) * 100 : 0;
       return { ...g, currentArs, pct };
@@ -653,15 +690,74 @@ export default function App() {
   }, [personGoals, personMovements, reportMonth]);
 
   function exportCSV() {
-    const headers = ["Fecha","Persona","Tipo","Categoría","F/V","Descripción","Moneda","Original","TC","ARS","USD","Medio"];
+    const headers = ["Fecha","Persona","Tipo","Categoría","F/V","Descripción","Moneda","Original","TC","ARS","USD"];
     const rows = filteredMovements.map((m) => [
       m.date, m.person, m.type, m.category, m.type === "Egreso" ? getFV(m.type, m.category) : "", m.description || "",
-      m.currency, m.originalAmount, m.fxRate, Number(m.amountArs || 0).toFixed(2), Number(m.amountUsd || 0).toFixed(2), m.paymentMethod,
+      m.currency, m.originalAmount, m.fxRate, Number(m.amountArs || 0).toFixed(2), Number(m.amountUsd || 0).toFixed(2),
     ]);
-    const csv = [headers, ...rows].map((r) => r.join(";")).join("\n");
+    downloadCSV([headers, ...rows], `movimientos_${filters.month || "todos"}`);
+  }
+
+  function exportSection(section) {
+    let headers, rows, filename;
+    if (section === "deudas") {
+      headers = ["Nombre","Responsable","Saldo","Cuota","Día venc.","Prioridad","Tasa","Total pagado","Estado","Notas"];
+      rows = debts.map((d) => [d.name, d.owner, d.balance, d.installment, d.dueDay, d.priority, d.rate, d.totalPaid || 0, d.status, d.notes || ""]);
+      filename = "deudas";
+    } else if (section === "presupuesto") {
+      headers = ["Mes","Persona","Tipo","Categoría","Presupuestado","Real","Diferencia","% Ejecución"];
+      rows = budgetComparison.map((b) => [b.month, b.person, b.type, b.category, b.planned.toFixed(2), b.actual.toFixed(2), b.difference.toFixed(2), b.execution.toFixed(1) + "%"]);
+      filename = `presupuesto_${reportMonth}`;
+    } else if (section === "metas") {
+      headers = ["Nombre","Responsable","Tipo","Periodicidad","Objetivo","Actual","Pendiente","% Avance"];
+      rows = goalProgress.map((g) => [g.name, g.owner, g.goal_type, g.period_type, g.target_amount || 0, g.currentArs.toFixed(2), Math.max(0, (g.target_amount || 0) - g.currentArs).toFixed(2), g.pct.toFixed(1) + "%"]);
+      filename = `metas_${reportMonth}`;
+    }
+    downloadCSV([headers, ...rows], filename);
+  }
+
+  function downloadCSV(data, filename) {
+    const csv = data.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(";")).join("\n");
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `movimientos_${filters.month || "todos"}.csv`; a.click();
+    const a = document.createElement("a"); a.href = url; a.download = `${filename}.csv`; a.click();
+  }
+
+  async function closeMonth(month) {
+    if (!window.confirm(`¿Cerrar el mes ${month}? No podrás editar movimientos de ese período.`)) return;
+    const existing = monthlyBalances.find((b) => b.balance_month === month);
+    const closing = (() => {
+      const rec = monthlyBalances.find((b) => b.balance_month === month);
+      const opening = rec?.opening_balance_ars || 0;
+      const monthMovs = personMovements.filter((m) => monthKey(m.date) === month);
+      const inc = monthMovs.filter((m) => m.type === "Ingreso").reduce((a, b) => a + b.amountArs, 0);
+      const exp = monthMovs.filter((m) => m.type === "Egreso").reduce((a, b) => a + b.amountArs, 0);
+      const sav = monthMovs.filter((m) => m.type === "Ahorro").reduce((a, b) => a + b.amountArs, 0);
+      const inv = monthMovs.filter((m) => m.type === "Inversión").reduce((a, b) => a + b.amountArs, 0);
+      return opening + inc - exp - sav - inv;
+    })();
+    // Compute next month
+    const [y, mo] = month.split("-").map(Number);
+    const nextDate = new Date(y, mo, 1);
+    const nextMonth = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, "0")}`;
+
+    // Mark current month as closed
+    if (existing) {
+      await supabase.from("monthly_balances").update({ closed: true, closing_balance_ars: closing }).eq("id", existing.id);
+      setMonthlyBalances((prev) => prev.map((b) => b.balance_month === month ? { ...b, closed: true, closing_balance_ars: closing } : b));
+    } else {
+      const { data } = await supabase.from("monthly_balances").insert([{ balance_month: month, opening_balance_ars: 0, closing_balance_ars: closing, closed: true }]).select().single();
+      if (data) setMonthlyBalances((prev) => [data, ...prev]);
+    }
+    // Auto-set next month opening if not already set
+    const nextExisting = monthlyBalances.find((b) => b.balance_month === nextMonth);
+    if (!nextExisting) {
+      const { data: nd } = await supabase.from("monthly_balances").insert([{ balance_month: nextMonth, opening_balance_ars: Math.round(closing), closed: false }]).select().single();
+      if (nd) setMonthlyBalances((prev) => [nd, ...prev]);
+    } else if (!nextExisting.opening_balance_ars) {
+      await supabase.from("monthly_balances").update({ opening_balance_ars: Math.round(closing) }).eq("id", nextExisting.id);
+      setMonthlyBalances((prev) => prev.map((b) => b.balance_month === nextMonth ? { ...b, opening_balance_ars: Math.round(closing) } : b));
+    }
   }
 
   const selectedDebtForMov = personDebts.find((d) => String(d.id) === String(movForm.linkedDebtId));
@@ -721,11 +817,13 @@ export default function App() {
                 {(movForm.type === "Ahorro" || movForm.type === "Inversión") && <Field label="Meta"><Select value={movForm.linkedGoalId} onChange={(v) => setMovForm({ ...movForm, linkedGoalId: v })}><option value="">Elegir meta…</option>{availableGoalsForMov.map((g) => <option key={g.id} value={String(g.id)}>{g.name} · {g.period_type}</option>)}</Select></Field>}
                 <Field label="Moneda"><Select value={movForm.currency} onChange={(v) => setMovForm({ ...movForm, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
                 <Field label={`Importe${movForm.currency === "USD" ? " (USD)" : " (ARS)"}`}><Input type="number" value={movForm.originalAmount} onChange={(e) => setMovForm({ ...movForm, originalAmount: e.target.value })} placeholder="0" /></Field>
-                <Field label="Medio de pago"><Select value={movForm.paymentMethod} onChange={(v) => setMovForm({ ...movForm, paymentMethod: v })}>{paymentMethods.map((m) => <option key={m} value={m}>{m}</option>)}</Select></Field>
                 <Field label="Descripción"><Input value={movForm.description} onChange={(e) => setMovForm({ ...movForm, description: e.target.value })} placeholder="Detalle opcional" /></Field>
               </div>
               {selectedDebtForMov && movForm.category === "Deuda" && <InfoBox color="blue">Cuota sugerida: <strong>{fmtArs(selectedDebtForMov.installment)}</strong> · Saldo pendiente: <strong>{fmtArs(selectedDebtForMov.balance)}</strong>.</InfoBox>}
               {selectedGoalForMov && <InfoBox color="amber">Meta vinculada: <strong>{selectedGoalForMov.name}</strong> · {selectedGoalForMov.period_type}.</InfoBox>}
+              {!movForm.linkedGoalId && (movForm.type === "Ahorro" || movForm.type === "Inversión") && movForm.category && goals.some((g) => g.active !== false && g.goal_type === movForm.type && g.name.toLowerCase() === movForm.category.toLowerCase()) && (
+                <InfoBox color="green">✓ Esta categoría coincide con una meta activa — se acumulará automáticamente.</InfoBox>
+              )}
               {movForm.currency === "USD" && <InfoBox color="amber">Cotización blue del momento: <strong>{money(blueRate)}</strong> por USD · Importe en ARS: <strong>{money(toArs(movForm.originalAmount || 0, "USD", blueRate))}</strong></InfoBox>}
               <div style={{ marginTop: 16 }}><Btn onClick={addMovement} disabled={saving || !movForm.type || !movForm.category || !movForm.originalAmount}>{saving ? "Guardando…" : "＋ Agregar movimiento"}</Btn></div>
             </Card>
@@ -734,7 +832,19 @@ export default function App() {
 
         {tab === "dashboard" && (
           <div className="tab-content">
-            <Card><CardHead title="Vista general" icon="📌" /><div className="muted small">Persona: {selectedPerson === "all" ? "Todas" : selectedPerson} · Mes: {reportMonth}</div></Card>
+            <Card>
+              <CardHead title="Vista general" icon="📌" />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <div className="muted small">Persona: {selectedPerson === "all" ? "Todas" : selectedPerson} · Mes: {reportMonth}</div>
+                {(() => {
+                  const rec = monthlyBalances.find((b) => b.balance_month === reportMonth);
+                  const isClosed = rec?.closed;
+                  return isClosed
+                    ? <Badge color="purple">🔒 Mes cerrado</Badge>
+                    : <Btn small variant="outline" onClick={() => closeMonth(reportMonth)}>🔒 Cerrar mes</Btn>;
+                })()}
+              </div>
+            </Card>
             <div className="stats-grid compact-stats-grid">
               {[
                 { label: "Ingresos", value: monthlyKpis.income, icon: "💵", color: "green", suffix: "" },
@@ -787,28 +897,50 @@ export default function App() {
                 <Field label="Moneda"><Select value={filters.currency} onChange={(v) => setFilters({ ...filters, currency: v })}><option value="all">Todas</option><option value="ARS">ARS</option><option value="USD">USD</option></Select></Field>
                 <Field label="F/V"><Select value={filters.fv} onChange={(v) => setFilters({ ...filters, fv: v })}><option value="all">Todos</option><option value="F">Fijos</option><option value="V">Variables</option></Select></Field>
               </div>
-              <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}><Btn onClick={exportCSV} variant="outline">⬇ Exportar CSV</Btn><span className="muted small" style={{ alignSelf: "center" }}>{filteredMovements.length} registros</span></div>
+              <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}><Btn onClick={exportCSV} variant="outline">⬇ Exportar movimientos</Btn><span className="muted small" style={{ alignSelf: "center" }}>{filteredMovements.length} registros</span></div>
             </Card>
             <Card>
               <div className="table-wrap">
                 <table className="data-table">
-                  <thead><tr><th>Fecha</th><th>Persona</th><th>Tipo</th><th>Categoría</th><th>F/V</th><th>Descripción</th><th>Moneda</th><th>Original</th><th>ARS</th><th>USD</th><th>Medio</th><th></th></tr></thead>
+                  <thead><tr><th>Fecha</th><th>Persona</th><th>Tipo</th><th>Categoría</th><th>F/V</th><th>Descripción</th><th>Moneda</th><th>Original</th><th>ARS</th><th>USD</th><th></th></tr></thead>
                   <tbody>
-                    {filteredMovements.map((m) => (
-                      <tr key={m.id}>
-                        <td>{m.date}</td><td>{m.person}</td>
-                        <td><Badge color={m.type === "Ingreso" ? "green" : m.type === "Egreso" ? "red" : m.type === "Ahorro" ? "blue" : "purple"}>{m.type}</Badge></td>
-                        <td>{m.category}</td>
-                        <td>{m.type === "Egreso" ? <Badge color={getFV(m.type, m.category) === "F" ? "red" : "amber"}>{getFV(m.type, m.category)}</Badge> : "—"}</td>
-                        <td className="muted">{m.description || "—"}</td>
-                        <td>{m.currency}</td>
-                        <td className="number">{money(m.originalAmount, m.currency)}</td>
-                        <td className="number fw">{fmtArs(m.amountArs)}</td>
-                        <td className="number muted">{money(m.amountUsd || 0, "USD")}</td>
-                        <td>{m.paymentMethod}</td>
-                        <td><button className="del-btn" onClick={() => deleteMovement(m.id)}>🗑</button></td>
-                      </tr>
-                    ))}
+                    {filteredMovements.map((m) => {
+                      const isEditing = editingMovId === m.id;
+                      const isClosed = monthlyBalances.find((b) => b.balance_month === monthKey(m.date) && b.closed);
+                      return (
+                        <tr key={m.id}>
+                          <td>{m.date}</td><td>{m.person}</td>
+                          <td><Badge color={m.type === "Ingreso" ? "green" : m.type === "Egreso" ? "red" : m.type === "Ahorro" ? "blue" : "purple"}>{m.type}</Badge></td>
+                          <td>{m.category}</td>
+                          <td>{m.type === "Egreso" ? <Badge color={getFV(m.type, m.category) === "F" ? "red" : "amber"}>{getFV(m.type, m.category)}</Badge> : "—"}</td>
+                          <td className="muted">
+                            {isEditing
+                              ? <Input value={editMovData.description} onChange={(e) => setEditMovData((d) => ({ ...d, description: e.target.value }))} placeholder="Descripción" />
+                              : m.description || "—"}
+                          </td>
+                          <td>{m.currency}</td>
+                          <td className="number">
+                            {isEditing
+                              ? <Input type="number" value={editMovData.originalAmount} onChange={(e) => setEditMovData((d) => ({ ...d, originalAmount: e.target.value }))} style={{ width: 100 }} />
+                              : money(m.originalAmount, m.currency)}
+                          </td>
+                          <td className="number fw">{fmtArs(m.amountArs)}</td>
+                          <td className="number muted">{money(m.amountUsd || 0, "USD")}</td>
+                          <td style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                            {!isClosed && (
+                              isEditing
+                                ? <>
+                                    <button className="del-btn" style={{ borderColor: "#bbf7d0", color: "#16a34a" }} onClick={() => saveEditMovement(m.id)}>✓</button>
+                                    <button className="del-btn" onClick={() => setEditingMovId(null)}>✕</button>
+                                  </>
+                                : <button className="del-btn" style={{ borderColor: "#bfdbfe", color: "#1e40af" }} onClick={() => { setEditingMovId(m.id); setEditMovData({ originalAmount: String(m.originalAmount), description: m.description || "" }); }}>✏</button>
+                            )}
+                            {!isClosed && <button className="del-btn" onClick={() => deleteMovement(m.id)}>🗑</button>}
+                            {isClosed && <span className="muted small">🔒</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
                 {filteredMovements.length === 0 && <EmptyState msg="No hay movimientos con esos filtros." />}
@@ -819,6 +951,10 @@ export default function App() {
 
         {tab === "presupuesto" && (
           <div className="tab-content">
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <Btn small variant="outline" onClick={() => exportSection("presupuesto")}>⬇ Exportar presupuesto CSV</Btn>
+              <Btn small variant="outline" onClick={() => exportSection("metas")}>⬇ Exportar metas CSV</Btn>
+            </div>
             <Card>
               <CardHead title="Saldo inicial del mes" icon="🏦" />
               {(() => {
@@ -921,7 +1057,8 @@ export default function App() {
 
             <Card>
               <CardHead title="Crear meta" icon="⭐" />
-              <div className="form-grid">
+              <InfoBox color="blue">💡 Si el nombre de la meta coincide con una categoría de Ahorro o Inversión, los movimientos de esa categoría se acumularán automáticamente sin necesidad de vinculación manual.</InfoBox>
+              <div className="form-grid" style={{ marginTop: 12 }}>
                 <Field label="Nombre"><Input value={goalForm.name} onChange={(e) => setGoalForm({ ...goalForm, name: e.target.value })} /></Field>
                 <Field label="Responsable"><Select value={goalForm.owner} onChange={(v) => setGoalForm({ ...goalForm, owner: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
                 <Field label="Tipo"><Select value={goalForm.goalType} onChange={(v) => setGoalForm({ ...goalForm, goalType: v })}><option value="Ahorro">Ahorro</option><option value="Inversión">Inversión</option></Select></Field>
@@ -992,6 +1129,7 @@ export default function App() {
 
         {tab === "deudas" && (
           <div className="tab-content">
+            <div style={{ display: "flex", justifyContent: "flex-end" }}><Btn small variant="outline" onClick={() => exportSection("deudas")}>⬇ Exportar deudas CSV</Btn></div>
             <div className="two-col">
               <Card>
                 <CardHead title="Agregar deuda" icon="💳" />
@@ -1014,7 +1152,6 @@ export default function App() {
                   <Field label="Fecha"><Input type="date" value={debtPayForm.date} onChange={(e) => setDebtPayForm({ ...debtPayForm, date: e.target.value })} /></Field>
                   <Field label="Importe"><Input type="number" value={debtPayForm.amount} onChange={(e) => setDebtPayForm({ ...debtPayForm, amount: e.target.value })} /></Field>
                   <Field label="Persona"><Select value={debtPayForm.person} onChange={(v) => setDebtPayForm({ ...debtPayForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
-                  <Field label="Medio de pago"><Select value={debtPayForm.paymentMethod} onChange={(v) => setDebtPayForm({ ...debtPayForm, paymentMethod: v })}>{paymentMethods.map((m) => <option key={m} value={m}>{m}</option>)}</Select></Field>
                   <Field label="Notas"><Input value={debtPayForm.notes} onChange={(e) => setDebtPayForm({ ...debtPayForm, notes: e.target.value })} /></Field>
                 </div>
                 {selectedDebtForPay && <InfoBox color="blue">Saldo actual: <strong>{fmtArs(selectedDebtForPay.balance)}</strong> · Cuota estimada: <strong>{fmtArs(selectedDebtForPay.installment)}</strong></InfoBox>}
