@@ -240,6 +240,8 @@ function HorizontalBarChart({ data, formatter }) {
     </div>
   );
 }
+
+const TABS = [
   { id: "cargar", label: "📥 Cargar" },
   { id: "dashboard", label: "📊 Dashboard" },
   { id: "datos", label: "🗂 Datos" },
