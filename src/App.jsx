@@ -339,6 +339,7 @@ export default function App() {
   const [debtPayForm, setDebtPayForm] = useState({ debtId: "", date: today(), amount: "", person: "Compartido", notes: "" });
   const [balanceForm, setBalanceForm] = useState({ month: currentMonth(), opening: "", notes: "" });
   const [catalogForm, setCatalogForm] = useState({ person: "", type: "", categoryType: "Egreso", category: "", categoryFv: "V" });
+  const [copyBudgetMsg, setCopyBudgetMsg] = useState("");
 
   useEffect(() => {
     async function load() {
@@ -586,15 +587,12 @@ export default function App() {
 
   async function addBudget() {
     if (!budgetForm.month || !budgetForm.person || !budgetForm.type || !budgetForm.category || !budgetForm.planned) return;
-    // Verificar si ya existe esa combinación mes+persona+tipo+categoría
     const duplicate = budgets.find((b) =>
-      b.month === budgetForm.month &&
-      b.person === budgetForm.person &&
-      b.type === budgetForm.type &&
-      b.category === budgetForm.category
+      b.month === budgetForm.month && b.person === budgetForm.person &&
+      b.type === budgetForm.type && b.category === budgetForm.category
     );
     if (duplicate) {
-      setCopyBudgetMsg(`⚠️ Ya existe ${budgetForm.category} · ${budgetForm.person} en ${budgetForm.month}. Eliminá la línea existente primero si querés cambiarla.`);
+      setCopyBudgetMsg(`⚠️ Ya existe "${budgetForm.category}" para ${budgetForm.person} en ${budgetForm.month}. Eliminá esa línea primero si querés cambiar el importe.`);
       setTimeout(() => setCopyBudgetMsg(""), 5000);
       return;
     }
@@ -603,11 +601,39 @@ export default function App() {
       planned_amount_ars: Number(budgetForm.planned),
     }]).select().single();
     if (data) setBudgets((prev) => [{ id: data.id, month: data.budget_month, person: data.person, type: data.type, category: data.category, planned: data.planned_amount_ars }, ...prev]);
+    // Mantiene mes/persona/tipo, solo limpia importe
     setBudgetForm((f) => ({ ...f, planned: "" }));
   }
   async function deleteBudget(id) {
     await supabase.from("budgets").delete().eq("id", id);
     setBudgets((prev) => prev.filter((b) => b.id !== id));
+  }
+
+  async function copyBudgetFromPrevMonth(targetMonth) {
+    // Calcular mes anterior
+    const [y, m] = targetMonth.split("-").map(Number);
+    const prevDate = new Date(y, m - 2, 1);
+    const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
+    const prevBudgets = budgets.filter((b) => b.month === prevMonth);
+    if (!prevBudgets.length) return { count: 0 };
+    // Solo copiar los que no existen ya en el mes destino
+    const existing = budgets.filter((b) => b.month === targetMonth);
+    const toInsert = prevBudgets.filter((pb) =>
+      !existing.some((eb) => eb.person === pb.person && eb.type === pb.type && eb.category === pb.category)
+    );
+    if (!toInsert.length) return { count: 0, skipped: true };
+    const rows = toInsert.map((b) => ({
+      budget_month: targetMonth, person: b.person, type: b.type,
+      category: b.category, planned_amount_ars: b.planned,
+    }));
+    const { data } = await supabase.from("budgets").insert(rows).select();
+    if (data) {
+      setBudgets((prev) => [
+        ...data.map((d) => ({ id: d.id, month: d.budget_month, person: d.person, type: d.type, category: d.category, planned: d.planned_amount_ars })),
+        ...prev,
+      ]);
+    }
+    return { count: toInsert.length };
   }
 
   async function saveBalance() {
@@ -1246,7 +1272,20 @@ export default function App() {
             </Card>
 
             <Card>
-              <CardHead title="Agregar presupuesto" icon="🎯" />
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+                <CardHead title="Agregar presupuesto" icon="🎯" />
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {copyBudgetMsg && <span className="muted small">{copyBudgetMsg}</span>}
+                  <Btn small variant="outline" onClick={async () => {
+                    setCopyBudgetMsg("Copiando…");
+                    const result = await copyBudgetFromPrevMonth(budgetForm.month);
+                    if (result.skipped) setCopyBudgetMsg("Ya están todos cargados para este mes.");
+                    else if (result.count === 0) setCopyBudgetMsg("No hay presupuesto en el mes anterior.");
+                    else setCopyBudgetMsg(`✓ ${result.count} línea${result.count !== 1 ? "s" : ""} copiada${result.count !== 1 ? "s" : ""}`);
+                    setTimeout(() => setCopyBudgetMsg(""), 3000);
+                  }}>📋 Copiar mes anterior</Btn>
+                </div>
+              </div>
               <div className="form-grid">
                 <Field label="Mes"><Input type="month" value={budgetForm.month} onChange={(e) => setBudgetForm({ ...budgetForm, month: e.target.value })} /></Field>
                 <Field label="Persona"><Select value={budgetForm.person} onChange={(v) => setBudgetForm({ ...budgetForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
@@ -1254,7 +1293,7 @@ export default function App() {
                 <Field label="Categoría"><Select value={budgetForm.category} onChange={(v) => setBudgetForm({ ...budgetForm, category: v })}>{(categoryMap[budgetForm.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
                 <Field label="Importe presupuestado"><Input type="number" value={budgetForm.planned} onChange={(e) => setBudgetForm({ ...budgetForm, planned: e.target.value })} placeholder="0" /></Field>
               </div>
-              <div style={{ marginTop: 12 }}><Btn onClick={addBudget}>＋ Agregar presupuesto</Btn></div>
+              <div style={{ marginTop: 12 }}><Btn onClick={addBudget}>＋ Agregar línea</Btn></div>
             </Card>
 
             <Card>
@@ -1368,71 +1407,49 @@ export default function App() {
               </Card>
             </div>
             <Card>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
-                <div className="card-head" style={{ margin: 0 }}>
-                  <span className="card-icon">🎯</span>
-                  <h2 className="card-title">Presupuesto vs Real · {reportMonth}</h2>
-                </div>
-                <Select value={reportBudgetPerson} onChange={setReportBudgetPerson} className="w-auto">
-                  <option value="all">Todas las personas</option>
-                  {people.map((p) => <option key={p} value={p}>{p}</option>)}
-                </Select>
-              </div>
+              <CardHead title={`Presupuesto vs Real · ${reportMonth}`} icon="🎯" />
               {(() => {
                 const cv = (ars) => displayCurrency === "USD" ? ars / Math.max(blueRate, 1) : ars;
-                const rows = budgetComparison.filter((b) => reportBudgetPerson === "all" || b.person === reportBudgetPerson);
-                if (!rows.length) return <EmptyState msg="No hay presupuestos para este mes." />;
+                // Agrupar por tipo+categoría sumando todas las personas (filtro global ya aplica en budgetComparison)
+                const grouped = {};
+                budgetComparison.forEach((b) => {
+                  const key = `${b.type}||${b.category}`;
+                  if (!grouped[key]) grouped[key] = { type: b.type, category: b.category, planned: 0, actual: 0 };
+                  grouped[key].planned += b.planned;
+                  grouped[key].actual  += b.actual;
+                });
+                const items = Object.values(grouped);
+                if (!items.length) return <EmptyState msg="No hay presupuestos para este mes." />;
                 return ["Egreso","Ingreso","Ahorro","Inversión"].map((tipo) => {
-                  const tipoRows = rows.filter((b) => b.type === tipo);
+                  const tipoRows = items.filter((r) => r.type === tipo).sort((a, b) => b.planned - a.planned);
                   if (!tipoRows.length) return null;
                   const tipoIcon = tipo === "Egreso" ? "💸" : tipo === "Ingreso" ? "💵" : tipo === "Ahorro" ? "🐷" : "📈";
                   return (
                     <div key={tipo} style={{ marginBottom: 18 }}>
-                      <div className="budget-type-header">{tipoIcon} {tipo}</div>
+                      <div className="budget-type-header">{tipoIcon} {tipo.toUpperCase()}</div>
                       {tipoRows.map((b) => {
-                        const isExp = b.type === "Egreso" || b.type === "Ahorro" || b.type === "Inversión";
-                        const over = b.execution > 100;
-                        const warn = b.execution >= 85;
-                        const barColor = isExp
-                          ? (over ? "#dc2626" : warn ? "#f59e0b" : "#16a34a")
-                          : (over ? "#16a34a" : "#2563eb");
-                        const badgeColor = isExp
-                          ? (over ? "red" : warn ? "amber" : "green")
-                          : (over ? "green" : "blue");
-                        // Barra: planned en gris, actual en color (sin solapar — ambas desde cero)
+                        const isExp = tipo === "Egreso" || tipo === "Ahorro" || tipo === "Inversión";
+                        const execution = b.planned > 0 ? (b.actual / b.planned) * 100 : 0;
+                        const over = execution > 100;
+                        const warn = execution >= 85;
+                        const barColor = isExp ? (over ? "#dc2626" : warn ? "#f59e0b" : "#16a34a") : (over ? "#16a34a" : "#2563eb");
+                        const badgeColor = isExp ? (over ? "red" : warn ? "amber" : "green") : (over ? "green" : "blue");
                         const maxVal = Math.max(b.planned, b.actual, 1);
                         const plannedPct = (b.planned / maxVal) * 100;
-                        const actualPct = (b.actual / maxVal) * 100;
-                        // Signo correcto en diferencia
+                        const actualPct  = Math.min((b.actual / maxVal) * 100, 100);
                         const diff = isExp ? b.planned - b.actual : b.actual - b.planned;
-                        const diffColor = diff >= 0 ? "green" : "red";
+                        const diffColor = diff >= 0 ? "#16a34a" : "#dc2626";
                         return (
-                          <div key={b.id} className="budget-inline-row">
+                          <div key={b.category} className="budget-inline-row">
                             <div className="budget-inline-left">
                               <span className="budget-inline-cat">{b.category}</span>
-                              <span className="muted small">{b.person}</span>
                             </div>
                             <div className="budget-inline-bar-wrap">
-                              {/* Double bar: planned (grey background) + actual (color) */}
-                              <div style={{ position: "relative", height: 8, borderRadius: 999, background: "#e2e8f0", overflow: "visible" }}>
-                                {/* Planned marker line */}
-                                <div style={{
-                                  position: "absolute", left: 0, top: 0, height: "100%",
-                                  width: `${plannedPct}%`, background: "#cbd5e1", borderRadius: 999,
-                                }} />
-                                {/* Actual bar */}
-                                <div style={{
-                                  position: "absolute", left: 0, top: 0, height: "100%",
-                                  width: `${Math.min(actualPct, 100)}%`,
-                                  background: barColor, borderRadius: 999, opacity: 0.85,
-                                }} />
-                                {/* Overflow indicator if over 100% */}
+                              <div style={{ position: "relative", height: 8, borderRadius: 999, background: "#e2e8f0" }}>
+                                <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${plannedPct}%`, background: "#cbd5e1", borderRadius: 999 }} />
+                                <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${actualPct}%`, background: barColor, borderRadius: 999, opacity: 0.9 }} />
                                 {b.actual > b.planned && (
-                                  <div style={{
-                                    position: "absolute", left: `${plannedPct}%`, top: -2,
-                                    height: 12, width: `${Math.min((b.actual - b.planned) / maxVal * 100, 100 - plannedPct)}%`,
-                                    background: "#dc2626", borderRadius: "0 999px 999px 0", opacity: 0.7,
-                                  }} />
+                                  <div style={{ position: "absolute", left: `${plannedPct}%`, top: -2, height: 12, width: `${Math.min(((b.actual - b.planned) / maxVal) * 100, 100 - plannedPct)}%`, background: "#dc2626", borderRadius: "0 999px 999px 0", opacity: 0.75 }} />
                                 )}
                               </div>
                               <div className="budget-inline-nums" style={{ marginTop: 4 }}>
@@ -1441,7 +1458,7 @@ export default function App() {
                               </div>
                             </div>
                             <div className="budget-inline-right">
-                              <Badge color={badgeColor}>{b.execution.toFixed(0)}%</Badge>
+                              <Badge color={badgeColor}>{execution.toFixed(0)}%</Badge>
                             </div>
                           </div>
                         );
