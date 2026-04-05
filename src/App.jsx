@@ -203,50 +203,58 @@ function PieChart({ data, nameKey, valueKey, formatter }) {
 }
 
 function HorizontalBarChart({ data, formatter }) {
-  // data: [{ label, real, budget }]
-  // Single bar per category: shows real vs budget as fill + background
   if (!data.length) return <EmptyState msg="Sin presupuestos para mostrar" />;
   const maxVal = Math.max(...data.map((d) => Math.max(d.real, d.budget || 0)), 1);
-  const rowH = 40, PL = 160, PR = 90, PT = 8, barH = 18;
-  const W = 580;
+  const rowH = 44, PL = 150, PR = 110, PT = 8, barH = 18;
+  const W = 600;
   const H = PT + data.length * rowH + 28;
+  const trackW = W - PL - PR;
 
   return (
     <div className="chart-wrap">
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto" }}>
         {data.map((d, i) => {
-          const y = PT + i * rowH;
-          const trackW = W - PL - PR;
-          const budgetW = d.budget > 0 ? (d.budget / maxVal) * trackW : trackW;
+          const y = PT + i * rowH + 4;
+          const budgetW = d.budget > 0 ? (d.budget / maxVal) * trackW : trackW * 0.98;
           const realW = Math.min((d.real / maxVal) * trackW, trackW);
           const over = d.budget > 0 && d.real > d.budget;
-          const warn = d.budget > 0 && !over && d.real / d.budget >= 0.85;
+          const warn = d.budget > 0 && !over && (d.real / d.budget) >= 0.85;
           const barColor = over ? "#dc2626" : warn ? "#f59e0b" : "#16a34a";
+          // % sign: negative = bad (over for expenses, under for income is handled by caller)
           const pct = d.budget > 0 ? Math.round((d.real / d.budget) * 100) : null;
+          const pctLabel = pct !== null ? (over ? `+${pct - 100}%` : `${pct}%`) : "";
 
           return (
             <g key={i}>
-              {/* label */}
-              <text x={PL - 8} y={y + barH / 2 + 4} textAnchor="end" fontSize="11" fill="#334155">{d.label}</text>
-              {/* budget track */}
+              <text x={PL - 8} y={y + barH / 2 + 4} textAnchor="end" fontSize="11" fill="#334155" fontWeight="600">{d.label}</text>
+              {/* budget track — drawn first so it's behind */}
               <rect x={PL} y={y} width={budgetW} height={barH} fill="#e2e8f0" rx="4" />
-              {/* real fill */}
-              <rect x={PL} y={y} width={Math.max(realW, 2)} height={barH} fill={barColor} rx="4" opacity="0.9" />
-              {/* budget amount — always at end of track */}
-              {d.budget > 0 && <text x={PL + budgetW + 4} y={y + 12} fontSize="9" fill="#94a3b8">{formatter ? formatter(d.budget) : d.budget}</text>}
-              {/* real amount */}
-              <text x={W - PR + 4} y={y + 12} fontSize="10" fontWeight="700" fill={barColor}>{formatter ? formatter(d.real) : d.real}</text>
-              {/* pct badge */}
-              {pct !== null && <text x={W - 10} y={y + 12} fontSize="9" fill="#64748b" textAnchor="end">{pct}%</text>}
+              {/* real fill on top */}
+              <rect x={PL} y={y} width={Math.max(realW, 3)} height={barH} fill={barColor} rx="4" opacity="0.9" />
+              {/* budget amount — placed AFTER track, right side of grey zone */}
+              {d.budget > 0 && (
+                <text x={PL + budgetW - 4} y={y - 3} textAnchor="end" fontSize="9" fill="#94a3b8">
+                  {formatter ? formatter(d.budget) : d.budget}
+                </text>
+              )}
+              {/* real amount — fixed right column */}
+              <text x={W - PR + 6} y={y + barH / 2 + 4} fontSize="11" fontWeight="700" fill={barColor}>
+                {formatter ? formatter(d.real) : d.real}
+              </text>
+              {/* pct — fixed right column */}
+              {pct !== null && (
+                <text x={W - 4} y={y + barH / 2 + 4} fontSize="10" fill={over ? "#dc2626" : "#64748b"} textAnchor="end" fontWeight={over ? "700" : "400"}>
+                  {pctLabel}
+                </text>
+              )}
             </g>
           );
         })}
-        {/* legend */}
         <g transform={`translate(${PL}, ${H - 16})`}>
           <rect width="10" height="10" fill="#e2e8f0" rx="2" /><text x="14" y="9" fontSize="10" fill="#64748b">Presupuestado</text>
           <rect x="115" width="10" height="10" fill="#16a34a" rx="2" /><text x="129" y="9" fontSize="10" fill="#64748b">Ok</text>
-          <rect x="160" width="10" height="10" fill="#f59e0b" rx="2" /><text x="174" y="9" fontSize="10" fill="#64748b">Cerca</text>
-          <rect x="215" width="10" height="10" fill="#dc2626" rx="2" /><text x="229" y="9" fontSize="10" fill="#64748b">Excedido</text>
+          <rect x="160" width="10" height="10" fill="#f59e0b" rx="2" /><text x="174" y="9" fontSize="10" fill="#64748b">Cerca (≥85%)</text>
+          <rect x="250" width="10" height="10" fill="#dc2626" rx="2" /><text x="264" y="9" fontSize="10" fill="#64748b">Excedido</text>
         </g>
       </svg>
     </div>
@@ -946,11 +954,12 @@ export default function App() {
                       { key: "Inversión", label: "− Inversión",  val: monthBalance.inv, cls: "",       icon: "📈" },
                     ];
                     return (<>
-                      {/* column headers */}
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto", gap: 8, padding: "4px 14px", fontSize: "0.75rem", fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                        <span></span><span style={{ minWidth: 80, textAlign: "right" }}>Presp.</span><span style={{ minWidth: 80, textAlign: "right" }}>Real</span><span style={{ minWidth: 70, textAlign: "right" }}>Desv.</span>
+                      {/* Saldo inicial — outside column grid */}
+                      <div className="balance-row"><span>Saldo inicial</span><strong>{cvt(monthBalance.opening)}</strong></div>
+                      {/* Column headers */}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 90px 80px", gap: 6, padding: "4px 14px", fontSize: "0.72rem", fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                        <span></span><span style={{ textAlign: "right" }}>Presp.</span><span style={{ textAlign: "right" }}>Real</span><span style={{ textAlign: "right" }}>Desv.</span>
                       </div>
-                      <div className="balance-row"><span>Saldo inicial</span><strong style={{ gridColumn: "span 3" }}>{cvt(monthBalance.opening)}</strong></div>
                       {types4.map(({ key, label, val, cls, icon }) => {
                         const budgeted = budgets.filter((b) => b.month === reportMonth && b.type === key && (selectedPerson === "all" || b.person === selectedPerson)).reduce((a, b) => a + b.planned, 0);
                         const isExpanded = expandedTypes[key];
@@ -974,13 +983,13 @@ export default function App() {
                           <div key={key}>
                             <div
                               className={`balance-row ${cls}`}
-                              style={{ cursor: catBreakdown.length > 0 ? "pointer" : "default", userSelect: "none", display: "grid", gridTemplateColumns: "1fr auto auto auto", gap: 8, alignItems: "center" }}
+                              style={{ cursor: catBreakdown.length > 0 ? "pointer" : "default", userSelect: "none", display: "grid", gridTemplateColumns: "1fr 90px 90px 80px", gap: 6, alignItems: "center" }}
                               onClick={() => catBreakdown.length > 0 && setExpandedTypes((p) => ({ ...p, [key]: !p[key] }))}
                             >
                               <span>{label} {catBreakdown.length > 0 ? (isExpanded ? "▲" : "▼") : ""}</span>
-                              <span style={{ minWidth: 80, textAlign: "right", fontSize: "0.88rem", color: "var(--muted)" }}>{budgeted > 0 ? cvt(budgeted) : "—"}</span>
-                              <strong style={{ minWidth: 80, textAlign: "right" }}>{cvt(val)}</strong>
-                              <span style={{ minWidth: 70, textAlign: "right", fontWeight: 700, fontSize: "0.88rem", color: budgeted > 0 ? desvColor : "var(--muted)" }}>
+                              <span style={{ textAlign: "right", fontSize: "0.85rem", color: "var(--muted)" }}>{budgeted > 0 ? cvt(budgeted) : "—"}</span>
+                              <strong style={{ textAlign: "right" }}>{cvt(val)}</strong>
+                              <span style={{ textAlign: "right", fontWeight: 700, fontSize: "0.85rem", color: budgeted > 0 ? desvColor : "var(--muted)" }}>
                                 {budgeted > 0 ? (desvArs >= 0 ? "+" : "") + cvt(desvArs) : "—"}
                               </span>
                             </div>
@@ -990,11 +999,11 @@ export default function App() {
                               const catDesv = key === "Ingreso" ? catReal - catBudget : catBudget - catReal;
                               const catDesvColor = catBudget === 0 ? "var(--muted)" : catDesv >= 0 ? "var(--green)" : "var(--red)";
                               return (
-                                <div key={cat} style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto", gap: 8, alignItems: "center", padding: "8px 14px", background: "#f8fafc", borderBottom: "1px solid var(--border)", fontSize: "0.85rem" }}>
+                                <div key={cat} style={{ display: "grid", gridTemplateColumns: "1fr 90px 90px 80px", gap: 6, alignItems: "center", padding: "7px 14px", background: "#f8fafc", borderBottom: "1px solid var(--border)", fontSize: "0.85rem" }}>
                                   <span className="muted" style={{ paddingLeft: 16 }}>{cat}</span>
-                                  <span style={{ minWidth: 80, textAlign: "right", color: "var(--muted)" }}>{catBudget > 0 ? cvt(catBudget) : "—"}</span>
-                                  <span style={{ minWidth: 80, textAlign: "right", fontWeight: 700 }}>{cvt(catReal)}</span>
-                                  <span style={{ minWidth: 70, textAlign: "right", fontWeight: 700, color: catBudget > 0 ? catDesvColor : "var(--muted)" }}>
+                                  <span style={{ textAlign: "right", color: "var(--muted)" }}>{catBudget > 0 ? cvt(catBudget) : "—"}</span>
+                                  <span style={{ textAlign: "right", fontWeight: 700 }}>{cvt(catReal)}</span>
+                                  <span style={{ textAlign: "right", fontWeight: 700, color: catBudget > 0 ? catDesvColor : "var(--muted)" }}>
                                     {catBudget > 0 ? (catDesv >= 0 ? "+" : "") + cvt(catDesv) : "—"}
                                   </span>
                                 </div>
@@ -1003,7 +1012,8 @@ export default function App() {
                           </div>
                         );
                       })}
-                      <div className="balance-row total"><span>= Saldo final</span><strong style={{ gridColumn: "span 3" }}>{cvt(monthBalance.closing)}</strong></div>
+                      {/* Saldo final — outside column grid */}
+                      <div className="balance-row total"><span>= Saldo final</span><strong>{cvt(monthBalance.closing)}</strong></div>
                     </>);
                   })()}
                 </div>
@@ -1142,8 +1152,14 @@ export default function App() {
               <Btn small variant="outline" onClick={() => exportSection("metas")}>⬇ Exportar metas CSV</Btn>
             </div>
             <Card>
-              <CardHead title="Saldo inicial del mes" icon="🏦" />
-              {(() => {
+              <div
+                style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none" }}
+                onClick={() => setExpandedTypes((p) => ({ ...p, _saldoInicial: !p._saldoInicial }))}
+              >
+                <CardHead title="Saldo inicial del mes" icon="🏦" />
+                <span className="muted small" style={{ paddingRight: 4 }}>{expandedTypes._saldoInicial ? "▲ ocultar" : "▼ editar"}</span>
+              </div>
+              {expandedTypes._saldoInicial && (() => {
                 // Compute previous month closing to suggest as opening
                 const prevMonth = (() => {
                   const [y, m] = balanceForm.month.split("-").map(Number);
