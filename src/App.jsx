@@ -1356,71 +1356,49 @@ export default function App() {
               </Card>
             </div>
             <Card>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
-                <div className="card-head" style={{ margin: 0 }}>
-                  <span className="card-icon">🎯</span>
-                  <h2 className="card-title">Presupuesto vs Real · {reportMonth}</h2>
-                </div>
-                <Select value={reportBudgetPerson} onChange={setReportBudgetPerson} className="w-auto">
-                  <option value="all">Todas las personas</option>
-                  {people.map((p) => <option key={p} value={p}>{p}</option>)}
-                </Select>
-              </div>
+              <CardHead title={`Presupuesto vs Real · ${reportMonth}`} icon="🎯" />
               {(() => {
                 const cv = (ars) => displayCurrency === "USD" ? ars / Math.max(blueRate, 1) : ars;
-                const rows = budgetComparison.filter((b) => reportBudgetPerson === "all" || b.person === reportBudgetPerson);
-                if (!rows.length) return <EmptyState msg="No hay presupuestos para este mes." />;
+                // Agrupar por tipo+categoría sumando todas las personas (el filtro global de persona ya filtra budgetComparison)
+                const grouped = {};
+                budgetComparison.forEach((b) => {
+                  const key = `${b.type}||${b.category}`;
+                  if (!grouped[key]) grouped[key] = { type: b.type, category: b.category, planned: 0, actual: 0 };
+                  grouped[key].planned += b.planned;
+                  grouped[key].actual  += b.actual;
+                });
+                const items = Object.values(grouped);
+                if (!items.length) return <EmptyState msg="No hay presupuestos para este mes." />;
                 return ["Egreso","Ingreso","Ahorro","Inversión"].map((tipo) => {
-                  const tipoRows = rows.filter((b) => b.type === tipo);
+                  const tipoRows = items.filter((r) => r.type === tipo).sort((a, b) => b.planned - a.planned);
                   if (!tipoRows.length) return null;
                   const tipoIcon = tipo === "Egreso" ? "💸" : tipo === "Ingreso" ? "💵" : tipo === "Ahorro" ? "🐷" : "📈";
                   return (
                     <div key={tipo} style={{ marginBottom: 18 }}>
-                      <div className="budget-type-header">{tipoIcon} {tipo}</div>
+                      <div className="budget-type-header">{tipoIcon} {tipo.toUpperCase()}</div>
                       {tipoRows.map((b) => {
-                        const isExp = b.type === "Egreso" || b.type === "Ahorro" || b.type === "Inversión";
-                        const over = b.execution > 100;
-                        const warn = b.execution >= 85;
-                        const barColor = isExp
-                          ? (over ? "#dc2626" : warn ? "#f59e0b" : "#16a34a")
-                          : (over ? "#16a34a" : "#2563eb");
-                        const badgeColor = isExp
-                          ? (over ? "red" : warn ? "amber" : "green")
-                          : (over ? "green" : "blue");
-                        // Barra: planned en gris, actual en color (sin solapar — ambas desde cero)
+                        const isExp = tipo === "Egreso" || tipo === "Ahorro" || tipo === "Inversión";
+                        const execution = b.planned > 0 ? (b.actual / b.planned) * 100 : 0;
+                        const over = execution > 100;
+                        const warn = execution >= 85;
+                        const barColor = isExp ? (over ? "#dc2626" : warn ? "#f59e0b" : "#16a34a") : (over ? "#16a34a" : "#2563eb");
+                        const badgeColor = isExp ? (over ? "red" : warn ? "amber" : "green") : (over ? "green" : "blue");
                         const maxVal = Math.max(b.planned, b.actual, 1);
                         const plannedPct = (b.planned / maxVal) * 100;
-                        const actualPct = (b.actual / maxVal) * 100;
-                        // Signo correcto en diferencia
+                        const actualPct  = Math.min((b.actual / maxVal) * 100, 100);
                         const diff = isExp ? b.planned - b.actual : b.actual - b.planned;
-                        const diffColor = diff >= 0 ? "green" : "red";
+                        const diffColor = diff >= 0 ? "#16a34a" : "#dc2626";
                         return (
-                          <div key={b.id} className="budget-inline-row">
+                          <div key={b.category} className="budget-inline-row">
                             <div className="budget-inline-left">
                               <span className="budget-inline-cat">{b.category}</span>
-                              <span className="muted small">{b.person}</span>
                             </div>
                             <div className="budget-inline-bar-wrap">
-                              {/* Double bar: planned (grey background) + actual (color) */}
-                              <div style={{ position: "relative", height: 8, borderRadius: 999, background: "#e2e8f0", overflow: "visible" }}>
-                                {/* Planned marker line */}
-                                <div style={{
-                                  position: "absolute", left: 0, top: 0, height: "100%",
-                                  width: `${plannedPct}%`, background: "#cbd5e1", borderRadius: 999,
-                                }} />
-                                {/* Actual bar */}
-                                <div style={{
-                                  position: "absolute", left: 0, top: 0, height: "100%",
-                                  width: `${Math.min(actualPct, 100)}%`,
-                                  background: barColor, borderRadius: 999, opacity: 0.85,
-                                }} />
-                                {/* Overflow indicator if over 100% */}
+                              <div style={{ position: "relative", height: 8, borderRadius: 999, background: "#e2e8f0" }}>
+                                <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${plannedPct}%`, background: "#cbd5e1", borderRadius: 999 }} />
+                                <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${actualPct}%`, background: barColor, borderRadius: 999, opacity: 0.9 }} />
                                 {b.actual > b.planned && (
-                                  <div style={{
-                                    position: "absolute", left: `${plannedPct}%`, top: -2,
-                                    height: 12, width: `${Math.min((b.actual - b.planned) / maxVal * 100, 100 - plannedPct)}%`,
-                                    background: "#dc2626", borderRadius: "0 999px 999px 0", opacity: 0.7,
-                                  }} />
+                                  <div style={{ position: "absolute", left: `${plannedPct}%`, top: -2, height: 12, width: `${Math.min(((b.actual - b.planned) / maxVal) * 100, 100 - plannedPct)}%`, background: "#dc2626", borderRadius: "0 999px 999px 0", opacity: 0.75 }} />
                                 )}
                               </div>
                               <div className="budget-inline-nums" style={{ marginTop: 4 }}>
@@ -1429,7 +1407,7 @@ export default function App() {
                               </div>
                             </div>
                             <div className="budget-inline-right">
-                              <Badge color={badgeColor}>{b.execution.toFixed(0)}%</Badge>
+                              <Badge color={badgeColor}>{execution.toFixed(0)}%</Badge>
                             </div>
                           </div>
                         );
