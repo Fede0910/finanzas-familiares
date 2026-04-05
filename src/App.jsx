@@ -286,6 +286,41 @@ function HorizontalBarChart({ data, formatter }) {
   );
 }
 
+function DescriptionAutocomplete({ value, onChange, suggestions }) {
+  const [open, setOpen] = useState(false);
+  const [inputVal, setInputVal] = useState(value || "");
+  const ref = React.useRef(null);
+  React.useEffect(() => { setInputVal(value || ""); }, [value]);
+  React.useEffect(() => {
+    function handler(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+  const filtered = suggestions.filter((s) =>
+    s.toLowerCase().includes(inputVal.toLowerCase()) && s.toLowerCase() !== inputVal.toLowerCase()
+  );
+  function select(s) { setInputVal(s); onChange(s); setOpen(false); }
+  function handleChange(e) { setInputVal(e.target.value); onChange(e.target.value); setOpen(true); }
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <input type="text" value={inputVal} onChange={handleChange} onFocus={() => setOpen(true)}
+        placeholder="Descripción / subcategoría" className="control" autoComplete="off" />
+      {open && filtered.length > 0 && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 100,
+          background: "white", border: "1.5px solid #e2e8f0", borderRadius: 10,
+          boxShadow: "0 4px 16px rgba(0,0,0,.1)", maxHeight: 200, overflowY: "auto", marginTop: 2 }}>
+          {filtered.map((s) => (
+            <div key={s} onMouseDown={() => select(s)}
+              style={{ padding: "9px 14px", cursor: "pointer", fontSize: "0.9rem", borderBottom: "1px solid #f1f5f9" }}
+              onMouseEnter={e => e.currentTarget.style.background = "#eff6ff"}
+              onMouseLeave={e => e.currentTarget.style.background = "white"}>{s}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const TABS = [
   { id: "cargar", label: "📥 Cargar" },
   { id: "dashboard", label: "📊 Dashboard" },
@@ -333,6 +368,7 @@ export default function App() {
   }), [blueRate]);
 
   const [movForm, setMovForm] = useState(emptyMovForm());
+  const [transferForm, setTransferForm] = useState({ date: today(), person: "Compartido", fromType: "Ahorro", fromCategory: "", toType: "Inversión", toCategory: "", originalAmount: "", currency: "ARS", description: "" });
   const [debtForm, setDebtForm] = useState({ name: "", owner: "Compartido", balance: "", installment: "", dueDay: "", priority: "Media", rate: "", notes: "" });
   const [goalForm, setGoalForm] = useState({ name: categoryMap["Ahorro"]?.[0] || "", owner: "Compartido", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
   const [budgetForm, setBudgetForm] = useState({ month: currentMonth(), person: "Compartido", type: "Egreso", category: "Supermercado", planned: "" });
@@ -497,6 +533,51 @@ export default function App() {
   async function deleteMovement(id) {
     await supabase.from("movements").delete().eq("id", id);
     setMovements((prev) => prev.filter((m) => m.id !== id));
+  }
+
+  async function addTransfer() {
+    const { date, person, fromType, fromCategory, toType, toCategory, originalAmount, currency, description } = transferForm;
+    if (!fromCategory || !toCategory || !originalAmount) return;
+    setSaving(true);
+    const rate = currency === "USD" ? blueRate : 1;
+    const amountArs = toArs(originalAmount, currency, rate);
+    const amountUsd = currency === "USD" ? Number(originalAmount) : amountArs / Math.max(blueRate, 1);
+    const desc = description || `Transferencia ${fromType} → ${toType}`;
+
+    // Movimiento 1: egreso del origen
+    const rowOut = {
+      movement_date: date, person, type: fromType, category: fromCategory,
+      description: desc, original_currency: currency,
+      original_amount: Number(originalAmount), fx_rate: rate,
+      amount_ars: amountArs, amount_usd: amountUsd,
+      payment_method: null, linked_debt_id: null, linked_goal_id: null,
+    };
+    // Movimiento 2: ingreso en el destino
+    const rowIn = {
+      movement_date: date, person, type: toType, category: toCategory,
+      description: desc, original_currency: currency,
+      original_amount: Number(originalAmount), fx_rate: rate,
+      amount_ars: amountArs, amount_usd: amountUsd,
+      payment_method: null, linked_debt_id: null, linked_goal_id: null,
+    };
+
+    const [{ data: d1 }, { data: d2 }] = await Promise.all([
+      supabase.from("movements").insert([rowOut]).select().single(),
+      supabase.from("movements").insert([rowIn]).select().single(),
+    ]);
+
+    const toMov = (d) => d ? {
+      id: d.id, date: d.movement_date, person: d.person, type: d.type, category: d.category,
+      description: d.description, originalAmount: d.original_amount, currency: d.original_currency,
+      fxRate: d.fx_rate, amountArs: d.amount_ars, amountUsd: d.amount_usd,
+      paymentMethod: d.payment_method, linkedDebtId: d.linked_debt_id, linkedGoalId: d.linked_goal_id,
+    } : null;
+
+    const newMovs = [toMov(d1), toMov(d2)].filter(Boolean);
+    if (newMovs.length) setMovements((prev) => [...newMovs, ...prev]);
+
+    setTransferForm({ date: today(), person: "Compartido", fromType: "Ahorro", fromCategory: "", toType: "Inversión", toCategory: "", originalAmount: "", currency: "ARS", description: "" });
+    setSaving(false);
   }
 
   async function saveEditMovement(id) {
@@ -900,6 +981,12 @@ export default function App() {
 
   const selectedDebtForMov = personDebts.find((d) => String(d.id) === String(movForm.linkedDebtId));
   const availableGoalsForMov = personGoals.filter((g) => g.active !== false && g.goal_type === movForm.type);
+  const descriptionSuggestions = useMemo(() => {
+    if (!movForm.category) return [];
+    const seen = new Set();
+    movements.forEach((m) => { if (m.category === movForm.category && m.description?.trim()) seen.add(m.description.trim()); });
+    return Array.from(seen).sort();
+  }, [movements, movForm.category]);
   const selectedGoalForMov = personGoals.find((g) => String(g.id) === String(movForm.linkedGoalId));
   const selectedDebtForPay = personDebts.find((d) => String(d.id) === String(debtPayForm.debtId));
 
@@ -961,7 +1048,7 @@ export default function App() {
 
                 <Field label="Moneda"><Select value={movForm.currency} onChange={(v) => setMovForm({ ...movForm, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
                 <Field label={`Importe${movForm.currency === "USD" ? " (USD)" : " (ARS)"}`}><Input type="number" value={movForm.originalAmount} onChange={(e) => setMovForm({ ...movForm, originalAmount: e.target.value })} placeholder="0" /></Field>
-                <Field label="Descripción"><Input value={movForm.description} onChange={(e) => setMovForm({ ...movForm, description: e.target.value })} placeholder="Detalle opcional" /></Field>
+                <Field label="Descripción / subcategoría"><DescriptionAutocomplete value={movForm.description} onChange={(v) => setMovForm({ ...movForm, description: v })} suggestions={descriptionSuggestions} /></Field>
               </div>
               {selectedDebtForMov && movForm.category === "Deuda" && <InfoBox color="blue">Cuota sugerida: <strong>{fmtArs(selectedDebtForMov.installment)}</strong> · Saldo pendiente: <strong>{fmtArs(selectedDebtForMov.balance)}</strong>.</InfoBox>}
               {movForm.currency === "USD" && <InfoBox color="amber">Cotización blue del momento: <strong>{money(blueRate)}</strong> por USD · Importe en ARS: <strong>{money(toArs(movForm.originalAmount || 0, "USD", blueRate))}</strong></InfoBox>}
@@ -971,6 +1058,84 @@ export default function App() {
                 return !hasBudget ? <InfoBox color="amber">⚠️ No hay presupuesto cargado para <strong>{movForm.category}</strong> · {movForm.person} en {monthMov}. Podés cargarlo en la pestaña Presupuesto.</InfoBox> : null;
               })()}
               <div style={{ marginTop: 16 }}><Btn onClick={addMovement} disabled={saving || !movForm.type || !movForm.category || !movForm.originalAmount}>{saving ? "Guardando…" : "＋ Agregar movimiento"}</Btn></div>
+            </Card>
+
+            <Card>
+              <CardHead title="Transferencia entre tipos" icon="🔀" />
+              <p className="muted small" style={{ marginBottom: 12 }}>
+                Movés plata de un tipo a otro (ej. Ahorro → Inversión). Se crean dos movimientos automáticamente: uno que resta del origen y otro que suma en el destino.
+              </p>
+              <div className="form-grid">
+                <Field label="Fecha">
+                  <Input type="date" value={transferForm.date} onChange={(e) => setTransferForm({ ...transferForm, date: e.target.value })} />
+                </Field>
+                <Field label="Persona">
+                  <Select value={transferForm.person} onChange={(v) => setTransferForm({ ...transferForm, person: v })}>
+                    {people.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Moneda">
+                  <Select value={transferForm.currency} onChange={(v) => setTransferForm({ ...transferForm, currency: v })}>
+                    <option value="ARS">Pesos (ARS)</option>
+                    <option value="USD">Dólar blue (USD)</option>
+                  </Select>
+                </Field>
+                <Field label={`Importe (${transferForm.currency})`}>
+                  <Input type="number" value={transferForm.originalAmount} onChange={(e) => setTransferForm({ ...transferForm, originalAmount: e.target.value })} placeholder="0" />
+                </Field>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 12, alignItems: "end", margin: "12px 0" }}>
+                {/* ORIGEN */}
+                <div style={{ display: "grid", gap: 8, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 12 }}>
+                  <div className="field-label" style={{ color: "#dc2626" }}>⬆ Origen (resta de…)</div>
+                  <Field label="Tipo">
+                    <Select value={transferForm.fromType} onChange={(v) => setTransferForm({ ...transferForm, fromType: v, fromCategory: "" })}>
+                      {types.map((t) => <option key={t} value={t}>{t}</option>)}
+                    </Select>
+                  </Field>
+                  <Field label="Categoría">
+                    <Select value={transferForm.fromCategory} onChange={(v) => setTransferForm({ ...transferForm, fromCategory: v })}>
+                      <option value="">Seleccionar…</option>
+                      {(categoryMap[transferForm.fromType] || []).map((c) => <option key={c} value={c}>{c}</option>)}
+                    </Select>
+                  </Field>
+                </div>
+                {/* FLECHA */}
+                <div style={{ textAlign: "center", fontSize: "1.5rem", paddingBottom: 8 }}>→</div>
+                {/* DESTINO */}
+                <div style={{ display: "grid", gap: 8, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: 12 }}>
+                  <div className="field-label" style={{ color: "#16a34a" }}>⬇ Destino (suma a…)</div>
+                  <Field label="Tipo">
+                    <Select value={transferForm.toType} onChange={(v) => setTransferForm({ ...transferForm, toType: v, toCategory: "" })}>
+                      {types.map((t) => <option key={t} value={t}>{t}</option>)}
+                    </Select>
+                  </Field>
+                  <Field label="Categoría">
+                    <Select value={transferForm.toCategory} onChange={(v) => setTransferForm({ ...transferForm, toCategory: v })}>
+                      <option value="">Seleccionar…</option>
+                      {(categoryMap[transferForm.toType] || []).map((c) => <option key={c} value={c}>{c}</option>)}
+                    </Select>
+                  </Field>
+                </div>
+              </div>
+              <Field label="Descripción (opcional)">
+                <Input value={transferForm.description} onChange={(e) => setTransferForm({ ...transferForm, description: e.target.value })} placeholder={`Ej. Paso fondos de ${transferForm.fromCategory || "origen"} a ${transferForm.toCategory || "destino"}`} />
+              </Field>
+              {transferForm.originalAmount && (
+                <InfoBox color="blue" style={{ marginTop: 10 }}>
+                  Se crearán 2 movimientos por <strong>{transferForm.currency === "USD" ? money(transferForm.originalAmount, "USD") : money(toArs(transferForm.originalAmount, "ARS", 1))}</strong>:
+                  un <strong>{transferForm.fromType}</strong> de {transferForm.fromCategory || "…"} y
+                  un <strong>{transferForm.toType}</strong> de {transferForm.toCategory || "…"}.
+                </InfoBox>
+              )}
+              <div style={{ marginTop: 14 }}>
+                <Btn
+                  onClick={addTransfer}
+                  disabled={saving || !transferForm.fromCategory || !transferForm.toCategory || !transferForm.originalAmount || transferForm.fromType === transferForm.toType && transferForm.fromCategory === transferForm.toCategory}
+                >
+                  {saving ? "Guardando…" : "🔀 Registrar transferencia"}
+                </Btn>
+              </div>
             </Card>
           </div>
         )}
