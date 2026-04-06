@@ -286,41 +286,6 @@ function HorizontalBarChart({ data, formatter }) {
   );
 }
 
-function DescriptionAutocomplete({ value, onChange, suggestions }) {
-  const [open, setOpen] = useState(false);
-  const [inputVal, setInputVal] = useState(value || "");
-  const ref = React.useRef(null);
-  React.useEffect(() => { setInputVal(value || ""); }, [value]);
-  React.useEffect(() => {
-    function handler(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
-  const filtered = suggestions.filter((s) =>
-    s.toLowerCase().includes(inputVal.toLowerCase()) && s.toLowerCase() !== inputVal.toLowerCase()
-  );
-  function select(s) { setInputVal(s); onChange(s); setOpen(false); }
-  function handleChange(e) { setInputVal(e.target.value); onChange(e.target.value); setOpen(true); }
-  return (
-    <div ref={ref} style={{ position: "relative" }}>
-      <input type="text" value={inputVal} onChange={handleChange} onFocus={() => setOpen(true)}
-        placeholder="Descripción / subcategoría" className="control" autoComplete="off" />
-      {open && filtered.length > 0 && (
-        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 100,
-          background: "white", border: "1.5px solid #e2e8f0", borderRadius: 10,
-          boxShadow: "0 4px 16px rgba(0,0,0,.1)", maxHeight: 200, overflowY: "auto", marginTop: 2 }}>
-          {filtered.map((s) => (
-            <div key={s} onMouseDown={() => select(s)}
-              style={{ padding: "9px 14px", cursor: "pointer", fontSize: "0.9rem", borderBottom: "1px solid #f1f5f9" }}
-              onMouseEnter={e => e.currentTarget.style.background = "#eff6ff"}
-              onMouseLeave={e => e.currentTarget.style.background = "white"}>{s}</div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 const TABS = [
   { id: "cargar", label: "📥 Cargar" },
   { id: "dashboard", label: "📊 Dashboard" },
@@ -361,7 +326,6 @@ export default function App() {
   const [reportBudgetPerson, setReportBudgetPerson] = useState("all");
   const [filters, setFilters] = useState({ type: "all", category: "all", dateFrom: currentMonth() + "-01", dateTo: today(), currency: "all", fv: "all" });
   const [expandedTypes, setExpandedTypes] = useState({});
-  const [expandedCats, setExpandedCats] = useState({});
 
   const emptyMovForm = useCallback(() => ({
     date: today(), person: "Compartido", type: "", category: "", description: "", originalAmount: "", currency: "ARS",
@@ -369,7 +333,6 @@ export default function App() {
   }), [blueRate]);
 
   const [movForm, setMovForm] = useState(emptyMovForm());
-  const [transferForm, setTransferForm] = useState({ date: today(), person: "Compartido", fromType: "Ahorro", fromCategory: "", toType: "Inversión", toCategory: "", originalAmount: "", currency: "ARS", description: "" });
   const [debtForm, setDebtForm] = useState({ name: "", owner: "Compartido", balance: "", installment: "", dueDay: "", priority: "Media", rate: "", notes: "" });
   const [goalForm, setGoalForm] = useState({ name: categoryMap["Ahorro"]?.[0] || "", owner: "Compartido", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
   const [budgetForm, setBudgetForm] = useState({ month: currentMonth(), person: "Compartido", type: "Egreso", category: "Supermercado", planned: "" });
@@ -534,27 +497,6 @@ export default function App() {
   async function deleteMovement(id) {
     await supabase.from("movements").delete().eq("id", id);
     setMovements((prev) => prev.filter((m) => m.id !== id));
-  }
-
-  async function addTransfer() {
-    const { date, person, fromType, fromCategory, toType, toCategory, originalAmount, currency, description } = transferForm;
-    if (!fromCategory || !toCategory || !originalAmount) return;
-    setSaving(true);
-    const rate = currency === "USD" ? blueRate : 1;
-    const amountArs = toArs(originalAmount, currency, rate);
-    const amountUsd = currency === "USD" ? Number(originalAmount) : amountArs / Math.max(blueRate, 1);
-    const desc = description || `Transferencia ${fromType} → ${toType}`;
-    const rowOut = { movement_date: date, person, type: fromType, category: fromCategory, description: desc, original_currency: currency, original_amount: Number(originalAmount), fx_rate: rate, amount_ars: amountArs, amount_usd: amountUsd, payment_method: null, linked_debt_id: null, linked_goal_id: null };
-    const rowIn  = { movement_date: date, person, type: toType,   category: toCategory,   description: desc, original_currency: currency, original_amount: Number(originalAmount), fx_rate: rate, amount_ars: amountArs, amount_usd: amountUsd, payment_method: null, linked_debt_id: null, linked_goal_id: null };
-    const [{ data: d1 }, { data: d2 }] = await Promise.all([
-      supabase.from("movements").insert([rowOut]).select().single(),
-      supabase.from("movements").insert([rowIn]).select().single(),
-    ]);
-    const toMov = (d) => d ? { id: d.id, date: d.movement_date, person: d.person, type: d.type, category: d.category, description: d.description, originalAmount: d.original_amount, currency: d.original_currency, fxRate: d.fx_rate, amountArs: d.amount_ars, amountUsd: d.amount_usd, paymentMethod: d.payment_method, linkedDebtId: d.linked_debt_id, linkedGoalId: d.linked_goal_id } : null;
-    const newMovs = [toMov(d1), toMov(d2)].filter(Boolean);
-    if (newMovs.length) setMovements((prev) => [...newMovs, ...prev]);
-    setTransferForm({ date: today(), person: "Compartido", fromType: "Ahorro", fromCategory: "", toType: "Inversión", toCategory: "", originalAmount: "", currency: "ARS", description: "" });
-    setSaving(false);
   }
 
   async function saveEditMovement(id) {
@@ -830,33 +772,6 @@ export default function App() {
     return Object.entries(bucket).map(([person, totalAmount]) => ({ person, total: totalAmount, pct: total > 0 ? totalAmount / total : 0 })).sort((a, b) => b.total - a.total);
   }, [movements, reportMonth, amountDisplay]);
 
-  // Evolución mensual por categoría+descripción
-  const evolutionData = useMemo(() => {
-    // Todos los meses con datos
-    const months = [...new Set(personMovements.map((m) => monthKey(m.date)))].sort();
-    // Todas las categorías con egresos
-    const cats = [...new Set(personMovements.filter((m) => m.type === "Egreso").map((m) => m.category))].sort();
-    // Por categoría → por descripción → por mes
-    const result = {};
-    cats.forEach((cat) => {
-      const catMovs = personMovements.filter((m) => m.type === "Egreso" && m.category === cat);
-      // Total por mes para esta categoría
-      const byMonth = {};
-      months.forEach((mo) => { byMonth[mo] = 0; });
-      catMovs.forEach((m) => { byMonth[monthKey(m.date)] = (byMonth[monthKey(m.date)] || 0) + amountDisplay(m); });
-      // Subcategorías (descripciones)
-      const descs = [...new Set(catMovs.filter((m) => m.description?.trim()).map((m) => m.description.trim()))].sort();
-      const subRows = descs.map((desc) => {
-        const subByMonth = {};
-        months.forEach((mo) => { subByMonth[mo] = 0; });
-        catMovs.filter((m) => m.description?.trim() === desc).forEach((m) => { subByMonth[monthKey(m.date)] = (subByMonth[monthKey(m.date)] || 0) + amountDisplay(m); });
-        return { desc, byMonth: subByMonth };
-      });
-      result[cat] = { byMonth, subRows };
-    });
-    return { months, cats, result };
-  }, [personMovements, amountDisplay]);
-
   const budgetComparison = useMemo(() => {
     return budgets
       .filter((b) => b.month === reportMonth && (selectedPerson === "all" || b.person === selectedPerson))
@@ -985,12 +900,6 @@ export default function App() {
 
   const selectedDebtForMov = personDebts.find((d) => String(d.id) === String(movForm.linkedDebtId));
   const availableGoalsForMov = personGoals.filter((g) => g.active !== false && g.goal_type === movForm.type);
-  const descriptionSuggestions = useMemo(() => {
-    if (!movForm.category) return [];
-    const seen = new Set();
-    movements.forEach((m) => { if (m.category === movForm.category && m.description?.trim()) seen.add(m.description.trim()); });
-    return Array.from(seen).sort();
-  }, [movements, movForm.category]);
   const selectedGoalForMov = personGoals.find((g) => String(g.id) === String(movForm.linkedGoalId));
   const selectedDebtForPay = personDebts.find((d) => String(d.id) === String(debtPayForm.debtId));
 
@@ -1052,7 +961,7 @@ export default function App() {
 
                 <Field label="Moneda"><Select value={movForm.currency} onChange={(v) => setMovForm({ ...movForm, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
                 <Field label={`Importe${movForm.currency === "USD" ? " (USD)" : " (ARS)"}`}><Input type="number" value={movForm.originalAmount} onChange={(e) => setMovForm({ ...movForm, originalAmount: e.target.value })} placeholder="0" /></Field>
-                <Field label="Descripción / subcategoría"><DescriptionAutocomplete value={movForm.description} onChange={(v) => setMovForm({ ...movForm, description: v })} suggestions={descriptionSuggestions} /></Field>
+                <Field label="Descripción"><Input value={movForm.description} onChange={(e) => setMovForm({ ...movForm, description: e.target.value })} placeholder="Detalle opcional" /></Field>
               </div>
               {selectedDebtForMov && movForm.category === "Deuda" && <InfoBox color="blue">Cuota sugerida: <strong>{fmtArs(selectedDebtForMov.installment)}</strong> · Saldo pendiente: <strong>{fmtArs(selectedDebtForMov.balance)}</strong>.</InfoBox>}
               {movForm.currency === "USD" && <InfoBox color="amber">Cotización blue del momento: <strong>{money(blueRate)}</strong> por USD · Importe en ARS: <strong>{money(toArs(movForm.originalAmount || 0, "USD", blueRate))}</strong></InfoBox>}
@@ -1062,37 +971,6 @@ export default function App() {
                 return !hasBudget ? <InfoBox color="amber">⚠️ No hay presupuesto cargado para <strong>{movForm.category}</strong> · {movForm.person} en {monthMov}. Podés cargarlo en la pestaña Presupuesto.</InfoBox> : null;
               })()}
               <div style={{ marginTop: 16 }}><Btn onClick={addMovement} disabled={saving || !movForm.type || !movForm.category || !movForm.originalAmount}>{saving ? "Guardando…" : "＋ Agregar movimiento"}</Btn></div>
-            </Card>
-
-            <Card>
-              <CardHead title="Transferencia entre tipos" icon="🔀" />
-              <p className="muted small" style={{ marginBottom: 12 }}>Movés plata de un tipo a otro (ej. Ahorro → Inversión). Se crean dos movimientos automáticamente.</p>
-              <div className="form-grid">
-                <Field label="Fecha"><Input type="date" value={transferForm.date} onChange={(e) => setTransferForm({ ...transferForm, date: e.target.value })} /></Field>
-                <Field label="Persona"><Select value={transferForm.person} onChange={(v) => setTransferForm({ ...transferForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
-                <Field label="Moneda"><Select value={transferForm.currency} onChange={(v) => setTransferForm({ ...transferForm, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
-                <Field label={`Importe (${transferForm.currency})`}><Input type="number" value={transferForm.originalAmount} onChange={(e) => setTransferForm({ ...transferForm, originalAmount: e.target.value })} placeholder="0" /></Field>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 12, alignItems: "end", margin: "14px 0" }}>
-                <div style={{ display: "grid", gap: 8, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 12 }}>
-                  <div className="field-label" style={{ color: "#dc2626" }}>⬆ Origen (resta de…)</div>
-                  <Field label="Tipo"><Select value={transferForm.fromType} onChange={(v) => setTransferForm({ ...transferForm, fromType: v, fromCategory: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                  <Field label="Categoría"><Select value={transferForm.fromCategory} onChange={(v) => setTransferForm({ ...transferForm, fromCategory: v })}><option value="">Seleccionar…</option>{(categoryMap[transferForm.fromType] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
-                </div>
-                <div style={{ textAlign: "center", fontSize: "1.5rem", paddingBottom: 8 }}>→</div>
-                <div style={{ display: "grid", gap: 8, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: 12 }}>
-                  <div className="field-label" style={{ color: "#16a34a" }}>⬇ Destino (suma a…)</div>
-                  <Field label="Tipo"><Select value={transferForm.toType} onChange={(v) => setTransferForm({ ...transferForm, toType: v, toCategory: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                  <Field label="Categoría"><Select value={transferForm.toCategory} onChange={(v) => setTransferForm({ ...transferForm, toCategory: v })}><option value="">Seleccionar…</option>{(categoryMap[transferForm.toType] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
-                </div>
-              </div>
-              <Field label="Descripción (opcional)"><Input value={transferForm.description} onChange={(e) => setTransferForm({ ...transferForm, description: e.target.value })} placeholder={`Ej. Paso fondos de ${transferForm.fromCategory || "origen"} a ${transferForm.toCategory || "destino"}`} /></Field>
-              {transferForm.originalAmount && transferForm.fromCategory && transferForm.toCategory && (
-                <InfoBox color="blue">Se crearán 2 movimientos por <strong>{transferForm.currency === "USD" ? money(transferForm.originalAmount, "USD") : money(toArs(transferForm.originalAmount, "ARS", 1))}</strong>: un egreso de <strong>{transferForm.fromCategory}</strong> ({transferForm.fromType}) y un ingreso en <strong>{transferForm.toCategory}</strong> ({transferForm.toType}).</InfoBox>
-              )}
-              <div style={{ marginTop: 14 }}>
-                <Btn onClick={addTransfer} disabled={saving || !transferForm.fromCategory || !transferForm.toCategory || !transferForm.originalAmount}>{saving ? "Guardando…" : "🔀 Registrar transferencia"}</Btn>
-              </div>
             </Card>
           </div>
         )}
@@ -1600,98 +1478,6 @@ export default function App() {
                 <BarChart data={annualByMonth} xKey="month" bars={[{ key: "fixed", label: "Fijos", color: "#dc2626" }, { key: "variable", label: "Variables", color: "#f59e0b" }]} formatter={(v, short) => short ? (displayCurrency === "USD" ? `${v.toFixed(0)}` : `${Math.round(v/1000)}K`) : fmt(v)} />
               </Card>
             </div>
-
-            {/* ── Evolución por categoría y subcategoría ── */}
-            <Card>
-              <CardHead title="Evolución mensual por categoría" icon="📊" />
-              <p className="muted small" style={{ marginBottom: 14 }}>
-                Tocá una categoría para ver el desglose por subcategoría (descripción). Verde = bajó, rojo = subió respecto al mes anterior. El filtro de persona aplica desde arriba.
-              </p>
-              {evolutionData.cats.length === 0 && <EmptyState msg="Sin egresos registrados." />}
-              {evolutionData.cats.length > 0 && (() => {
-                const { months, cats, result } = evolutionData;
-                // Mostrar últimos 6 meses máximo para que entre en pantalla
-                const visibleMonths = months.slice(-6);
-                return (
-                  <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
-                      <thead>
-                        <tr>
-                          <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "2px solid #e2e8f0", background: "#f8fafc", minWidth: 160 }}>Categoría</th>
-                          {visibleMonths.map((mo) => (
-                            <th key={mo} style={{ textAlign: "right", padding: "8px 10px", borderBottom: "2px solid #e2e8f0", background: "#f8fafc", whiteSpace: "nowrap" }}>
-                              {mo.slice(5)} {/* solo mm */}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {cats.map((cat) => {
-                          const { byMonth, subRows } = result[cat];
-                          const isExpanded = expandedCats[cat];
-                          const hasAny = visibleMonths.some((mo) => byMonth[mo] > 0);
-                          if (!hasAny) return null;
-                          return (
-                            <React.Fragment key={cat}>
-                              {/* Fila de categoría */}
-                              <tr
-                                onClick={() => setExpandedCats((p) => ({ ...p, [cat]: !p[cat] }))}
-                                style={{ cursor: subRows.length > 0 ? "pointer" : "default", background: isExpanded ? "#f8fafc" : "white" }}
-                              >
-                                <td style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", fontWeight: 700 }}>
-                                  {subRows.length > 0 && <span style={{ marginRight: 6, fontSize: "0.75rem", color: "#94a3b8" }}>{isExpanded ? "▼" : "▶"}</span>}
-                                  {cat}
-                                </td>
-                                {visibleMonths.map((mo, mi) => {
-                                  const val = byMonth[mo] || 0;
-                                  const prev = mi > 0 ? (byMonth[visibleMonths[mi - 1]] || 0) : null;
-                                  const trend = prev !== null && prev > 0 ? (val - prev) / prev : null;
-                                  const trendColor = trend === null ? "#64748b" : trend > 0.05 ? "#dc2626" : trend < -0.05 ? "#16a34a" : "#64748b";
-                                  return (
-                                    <td key={mo} style={{ textAlign: "right", padding: "9px 10px", borderBottom: "1px solid #e2e8f0", fontWeight: 700, color: val > 0 ? "#0f172a" : "#cbd5e1" }}>
-                                      {val > 0 ? (
-                                        <span>
-                                          {fmt(val)}
-                                          {trend !== null && <span style={{ fontSize: "0.7rem", color: trendColor, marginLeft: 4 }}>{trend > 0 ? "▲" : trend < 0 ? "▼" : "─"}{Math.abs(trend * 100).toFixed(0)}%</span>}
-                                        </span>
-                                      ) : <span style={{ color: "#e2e8f0" }}>—</span>}
-                                    </td>
-                                  );
-                                })}
-                              </tr>
-                              {/* Filas de subcategoría (descripción) */}
-                              {isExpanded && subRows.map((sub) => (
-                                <tr key={sub.desc} style={{ background: "#fafbfc" }}>
-                                  <td style={{ padding: "7px 10px 7px 28px", borderBottom: "1px solid #f1f5f9", color: "#475569", fontSize: "0.82rem" }}>
-                                    └ {sub.desc}
-                                  </td>
-                                  {visibleMonths.map((mo, mi) => {
-                                    const val = sub.byMonth[mo] || 0;
-                                    const prev = mi > 0 ? (sub.byMonth[visibleMonths[mi - 1]] || 0) : null;
-                                    const trend = prev !== null && prev > 0 ? (val - prev) / prev : null;
-                                    const trendColor = trend === null ? "#64748b" : trend > 0.05 ? "#dc2626" : trend < -0.05 ? "#16a34a" : "#64748b";
-                                    return (
-                                      <td key={mo} style={{ textAlign: "right", padding: "7px 10px", borderBottom: "1px solid #f1f5f9", fontSize: "0.82rem", color: val > 0 ? "#475569" : "#e2e8f0" }}>
-                                        {val > 0 ? (
-                                          <span>
-                                            {fmt(val)}
-                                            {trend !== null && <span style={{ fontSize: "0.68rem", color: trendColor, marginLeft: 4 }}>{trend > 0 ? "▲" : "▼"}{Math.abs(trend * 100).toFixed(0)}%</span>}
-                                          </span>
-                                        ) : <span style={{ color: "#e2e8f0" }}>—</span>}
-                                      </td>
-                                    );
-                                  })}
-                                </tr>
-                              ))}
-                            </React.Fragment>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                );
-              })()}
-            </Card>
           </div>
         )}
 
