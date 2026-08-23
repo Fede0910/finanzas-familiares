@@ -32,7 +32,7 @@ const DEFAULT_CATEGORY_ROWS = [
   { type: "Inversión", name: "Cripto", fv: "V", active: true },
 ];
 
-const PALETTE = ["#5b9dff", "#34d399", "#fbbf24", "#f87171", "#b39ffb", "#22d3ee", "#fb923c", "#f472b6"];
+const PALETTE = ["#38bdf8", "#34d399", "#fbbf24", "#f87171", "#b39ffb", "#22d3ee", "#fb923c", "#f472b6"];
 
 const money = (n, cur = "ARS") =>
   new Intl.NumberFormat("es-AR", {
@@ -2215,7 +2215,7 @@ export default function App() {
                       const warn = b.execution >= 85;
                       const barColor = isExp
                         ? (over ? "#f87171" : warn ? "#fbbf24" : "#34d399")
-                        : (over ? "#34d399" : "#5b9dff");
+                        : (over ? "#34d399" : "#38bdf8");
                       const badgeColor = isExp
                         ? (over ? "red" : warn ? "amber" : "green")
                         : (over ? "green" : "blue");
@@ -2269,7 +2269,7 @@ export default function App() {
               {!goalProgress.length && <EmptyState msg="No hay metas cargadas." />}
               {goalProgress.map((g) => {
                 const pct = Math.min(100, g.pct);
-                const barColor = pct >= 100 ? "#34d399" : pct >= 60 ? "#5b9dff" : "#fbbf24";
+                const barColor = pct >= 100 ? "#34d399" : pct >= 60 ? "#38bdf8" : "#fbbf24";
                 return (
                   <div key={g.id} className="budget-inline-row">
                     <div className="budget-inline-left">
@@ -2335,7 +2335,7 @@ export default function App() {
                         const execution = b.planned > 0 ? (b.actual / b.planned) * 100 : 0;
                         const over = execution > 100;
                         const warn = execution >= 85;
-                        const barColor = isExp ? (over ? "#f87171" : warn ? "#fbbf24" : "#34d399") : (over ? "#34d399" : "#5b9dff");
+                        const barColor = isExp ? (over ? "#f87171" : warn ? "#fbbf24" : "#34d399") : (over ? "#34d399" : "#38bdf8");
                         const badgeColor = isExp ? (over ? "red" : warn ? "amber" : "green") : (over ? "green" : "blue");
                         const maxVal = Math.max(b.planned, b.actual, 1);
                         const plannedPct = (b.planned / maxVal) * 100;
