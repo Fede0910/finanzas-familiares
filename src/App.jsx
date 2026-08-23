@@ -99,24 +99,29 @@ function computeLoanSchedule(loan, overrides = {}) {
   const term = !overrides.installment && loan.termMonths ? Number(loan.termMonths) : null;
   let installment = overrides.installment != null ? Number(overrides.installment) : (loan.targetInstallment ? Number(loan.targetInstallment) : null);
 
+  // Durante los meses de gracia el interés se capitaliza sobre el saldo (no se cobra cuota), así que
+  // la cuota (y la estimación de plazo) tienen que amortizar ese saldo ya crecido al cabo de la
+  // gracia, no el capital original — si no, la cuota queda corta y sobra un período extra al final.
+  const balanceAfterGrace = principal * Math.pow(1 + monthlyRate, grace);
+
   if (!installment && term) {
     installment = monthlyRate > 0
-      ? (principal * monthlyRate) / (1 - Math.pow(1 + monthlyRate, -term))
-      : principal / term;
+      ? (balanceAfterGrace * monthlyRate) / (1 - Math.pow(1 + monthlyRate, -term))
+      : balanceAfterGrace / term;
   }
   if (!installment || principal <= 0) return { installment: installment || 0, rows: [], estimatedTerm: term, canCancel: !!term };
 
-  const interestFirstPeriod = principal * monthlyRate;
+  const interestFirstPeriod = balanceAfterGrace * monthlyRate;
   let estimatedTerm = term;
   let canCancel = true;
   if (!estimatedTerm) {
     if (monthlyRate === 0) {
-      estimatedTerm = Math.ceil(principal / installment);
+      estimatedTerm = Math.ceil(balanceAfterGrace / installment);
     } else if (installment <= interestFirstPeriod) {
       canCancel = false;
       estimatedTerm = null;
     } else {
-      estimatedTerm = Math.ceil(-Math.log(1 - (principal * monthlyRate) / installment) / Math.log(1 + monthlyRate));
+      estimatedTerm = Math.ceil(-Math.log(1 - (balanceAfterGrace * monthlyRate) / installment) / Math.log(1 + monthlyRate));
     }
   }
 
@@ -127,7 +132,9 @@ function computeLoanSchedule(loan, overrides = {}) {
   for (let period = 0; period < maxPeriods; period++) {
     const interest = balance * monthlyRate;
     const inGrace = period < grace;
-    const payment = inGrace ? 0 : installment;
+    // Nunca cobrar de más: si lo que falta (interés + saldo) es menor a la cuota nominal —
+    // típicamente el último período, por redondeo — se cobra solo eso.
+    const payment = inGrace ? 0 : Math.min(installment, interest + balance);
     let principalPortion = inGrace ? 0 : Math.min(payment - interest, balance);
     let closingBalance = inGrace ? balance + interest : Math.max(0, balance - principalPortion);
     rows.push({ period: period + 1, date: dates[period], openingBalance: balance, interest, payment, principalPortion, closingBalance });
