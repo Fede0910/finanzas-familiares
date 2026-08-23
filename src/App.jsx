@@ -415,6 +415,7 @@ export default function App() {
   const emptyMovForm = useCallback(() => ({
     date: today(), person: "Compartido", type: "", category: "", subcategoryId: "", description: "", originalAmount: "", currency: "ARS",
     fxRate: blueRate, linkedDebtId: "", linkedGoalId: "", paymentMethod: "", cardId: "", installments: "1",
+    shared: false, sharedPeople: [],
   }), [blueRate]);
 
   const [movForm, setMovForm] = useState(emptyMovForm());
@@ -560,6 +561,13 @@ export default function App() {
     if (!movForm.category || !movForm.originalAmount || !movForm.person || !movForm.type) return;
     setSaving(true);
 
+    const isShared = movForm.shared && movForm.sharedPeople.length >= 2;
+    if (isShared) {
+      await addSharedMovement();
+      setSaving(false);
+      return;
+    }
+
     const isCardInstallments = movForm.paymentMethod === "Tarjeta" && movForm.cardId && Number(movForm.installments) > 1;
     if (isCardInstallments) {
       await addCardInstallmentPurchase();
@@ -623,8 +631,52 @@ export default function App() {
   }
 
   async function deleteMovement(id) {
+    const mov = movements.find((m) => m.id === id);
+    if (mov?.sharedGroupId) {
+      const groupMovs = movements.filter((m) => m.sharedGroupId === mov.sharedGroupId);
+      if (groupMovs.length > 1) {
+        const deleteAll = window.confirm(`Este movimiento es parte de un gasto compartido entre ${groupMovs.map((m) => m.person).join(", ")}. ¿Borrar los ${groupMovs.length} movimientos del grupo? (Cancelar borra solo este)`);
+        if (deleteAll) {
+          await supabase.from("movements").delete().in("id", groupMovs.map((m) => m.id));
+          const ids = new Set(groupMovs.map((m) => m.id));
+          setMovements((prev) => prev.filter((m) => !ids.has(m.id)));
+          return;
+        }
+      }
+    }
     await supabase.from("movements").delete().eq("id", id);
     setMovements((prev) => prev.filter((m) => m.id !== id));
+  }
+
+  // Gasto compartido: reparte el importe total en partes iguales entre las personas elegidas,
+  // un movimiento por persona, todos ligados por shared_group_id.
+  async function addSharedMovement() {
+    const total = Number(movForm.originalAmount);
+    const peopleList = movForm.sharedPeople;
+    const n = peopleList.length;
+    if (!total || n < 2) return;
+    const rate = movForm.currency === "USD" ? blueRate : 1;
+    const share = Math.round((total / n) * 100) / 100;
+    const subcategoryId = movForm.subcategoryId ? Number(movForm.subcategoryId) : null;
+    const groupId = crypto.randomUUID();
+    const cardId = movForm.paymentMethod === "Tarjeta" && movForm.cardId ? Number(movForm.cardId) : null;
+
+    const rows = peopleList.map((person, i) => {
+      const originalAmount = i === n - 1 ? Math.round((total - share * (n - 1)) * 100) / 100 : share;
+      const amountArs = toArs(originalAmount, movForm.currency, rate);
+      const amountUsd = movForm.currency === "USD" ? originalAmount : amountArs / Math.max(blueRate, 1);
+      return {
+        movement_date: movForm.date, person, type: movForm.type, category: movForm.category,
+        subcategory_id: subcategoryId, description: movForm.description || null,
+        original_currency: movForm.currency, original_amount: originalAmount, fx_rate: rate,
+        amount_ars: amountArs, amount_usd: amountUsd, payment_method: movForm.paymentMethod || null,
+        linked_debt_id: null, linked_goal_id: null, card_id: cardId, shared_group_id: groupId,
+      };
+    });
+    const { data, error } = await supabase.from("movements").insert(rows).select();
+    if (error) { console.error(error); return; }
+    if (data) setMovements((prev) => [...data.map(mapMovementRow), ...prev]);
+    setMovForm(emptyMovForm());
   }
 
   // Compra con tarjeta en cuotas: parte el importe total en N movimientos mensuales ligados a una serie.
@@ -1324,7 +1376,35 @@ export default function App() {
               <CardHead title="Carga rápida" icon="📥" />
               <div className="form-grid">
                 <Field label="Fecha"><Input type="date" value={movForm.date} onChange={(e) => setMovForm({ ...movForm, date: e.target.value })} /></Field>
-                <Field label="Persona"><Select value={movForm.person} onChange={(v) => setMovForm({ ...movForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                <Field label="Persona">
+                  {movForm.shared
+                    ? <div className="control" style={{ display: "flex", alignItems: "center", color: "var(--muted)" }}>Se reparte abajo 👇</div>
+                    : <Select value={movForm.person} onChange={(v) => setMovForm({ ...movForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select>}
+                </Field>
+                <Field label="¿Es compartido?">
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, height: "100%" }}>
+                    <input type="checkbox" checked={movForm.shared} onChange={(e) => setMovForm({ ...movForm, shared: e.target.checked, sharedPeople: [] })} />
+                    <span className="muted small">Repartir entre varias personas</span>
+                  </label>
+                </Field>
+                {movForm.shared && (
+                  <Field label="Repartir entre">
+                    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", height: "100%" }}>
+                      {people.filter((p) => p !== "Compartido").map((p) => (
+                        <label key={p} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <input
+                            type="checkbox"
+                            checked={movForm.sharedPeople.includes(p)}
+                            onChange={(e) => {
+                              const next = e.target.checked ? [...movForm.sharedPeople, p] : movForm.sharedPeople.filter((x) => x !== p);
+                              setMovForm({ ...movForm, sharedPeople: next });
+                            }}
+                          /> {p}
+                        </label>
+                      ))}
+                    </div>
+                  </Field>
+                )}
                 <Field label="Tipo"><Select value={movForm.type} onChange={(v) => setMovForm({ ...movForm, type: v, category: "", subcategoryId: "", linkedDebtId: "", linkedGoalId: "" })}><option value="">Seleccionar…</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
                 <Field label="Categoría"><Select value={movForm.category} onChange={(v) => setMovForm({ ...movForm, category: v, subcategoryId: "", linkedDebtId: v !== "Deuda" ? "" : movForm.linkedDebtId })} disabled={!movForm.type}><option value="">Seleccionar…</option>{(categoryMap[movForm.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
                 {movForm.type === "Egreso" && movForm.category === "Deuda" && <Field label="Deuda"><Select value={movForm.linkedDebtId} onChange={(v) => setMovForm({ ...movForm, linkedDebtId: v, originalAmount: personDebts.find((d) => String(d.id) === String(v))?.installment || "" })}><option value="">Elegir deuda…</option>{personDebts.map((d) => <option key={d.id} value={String(d.id)}>{d.name} ({fmtArs(d.balance)} pendiente)</option>)}</Select></Field>}
@@ -1357,12 +1437,18 @@ export default function App() {
               {movForm.paymentMethod === "Tarjeta" && Number(movForm.installments) > 1 && movForm.originalAmount && (
                 <InfoBox color="blue">Se van a crear <strong>{movForm.installments} movimientos mensuales</strong> de <strong>{money(Number(movForm.originalAmount) / Number(movForm.installments), movForm.currency)}</strong> cada uno, empezando el {movForm.date}.</InfoBox>
               )}
-              {movForm.type && movForm.category && (movForm.type === "Egreso" || movForm.type === "Ingreso") && (() => {
+              {movForm.shared && movForm.sharedPeople.length >= 2 && movForm.originalAmount && (
+                <InfoBox color="blue">Se reparte en partes iguales entre <strong>{movForm.sharedPeople.join(", ")}</strong>: <strong>{money(Number(movForm.originalAmount) / movForm.sharedPeople.length, movForm.currency)}</strong> cada uno.</InfoBox>
+              )}
+              {movForm.shared && movForm.sharedPeople.length < 2 && (
+                <InfoBox color="amber">Elegí al menos 2 personas para repartir el gasto.</InfoBox>
+              )}
+              {!movForm.shared && movForm.type && movForm.category && (movForm.type === "Egreso" || movForm.type === "Ingreso") && (() => {
                 const monthMov = monthKey(movForm.date);
                 const hasBudget = budgets.some((b) => b.month === monthMov && b.person === movForm.person && b.type === movForm.type && b.category === movForm.category);
                 return !hasBudget ? <InfoBox color="amber">⚠️ No hay presupuesto cargado para <strong>{movForm.category}</strong> · {movForm.person} en {monthMov}. Podés cargarlo en la pestaña Presupuesto.</InfoBox> : null;
               })()}
-              <div style={{ marginTop: 16 }}><Btn onClick={addMovement} disabled={saving || !movForm.type || !movForm.category || !movForm.originalAmount}>{saving ? "Guardando…" : "＋ Agregar movimiento"}</Btn></div>
+              <div style={{ marginTop: 16 }}><Btn onClick={addMovement} disabled={saving || !movForm.type || !movForm.category || !movForm.originalAmount || (movForm.shared && movForm.sharedPeople.length < 2)}>{saving ? "Guardando…" : "＋ Agregar movimiento"}</Btn></div>
             </Card>
 
             <Card>
@@ -1648,7 +1734,17 @@ export default function App() {
                       const isClosed = monthlyBalances.find((b) => b.balance_month === monthKey(m.date) && b.closed);
                       return (
                         <tr key={m.id}>
-                          <td>{m.date}</td><td>{m.person}</td>
+                          <td>{m.date}</td>
+                          <td>
+                            {m.person}
+                            {m.sharedGroupId && (
+                              <span
+                                className="muted small"
+                                title={`Compartido con ${movements.filter((x) => x.sharedGroupId === m.sharedGroupId && x.id !== m.id).map((x) => x.person).join(", ")}`}
+                                style={{ marginLeft: 4 }}
+                              >🤝</span>
+                            )}
+                          </td>
                           <td><Badge color={m.type === "Ingreso" ? "green" : m.type === "Egreso" ? "red" : m.type === "Ahorro" ? "blue" : "purple"}>{m.type}</Badge></td>
                           <td>{m.category}</td>
                           <td className="muted">{subcategoryNameById[m.subcategoryId] || "—"}</td>
@@ -1713,7 +1809,7 @@ export default function App() {
                       </div>
                       <div className="mov-card-amounts">
                         <div><span className="muted small">Fecha</span><div>{m.date}</div></div>
-                        <div><span className="muted small">Persona</span><div>{m.person}</div></div>
+                        <div><span className="muted small">Persona</span><div>{m.person}{m.sharedGroupId && <span className="muted small"> 🤝</span>}</div></div>
                         <div><span className="muted small">{m.currency === "USD" ? "USD" : "ARS"}</span>
                           <div className="fw">
                             {isEditing
