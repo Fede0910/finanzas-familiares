@@ -408,7 +408,8 @@ export default function App() {
   const [reportMonth, setReportMonth] = useState(currentMonth());
   const [selectedPerson, setSelectedPerson] = useState("all");
   const [reportBudgetPerson, setReportBudgetPerson] = useState("all");
-  const [filters, setFilters] = useState({ type: "all", category: "all", dateFrom: currentMonth() + "-01", dateTo: today(), currency: "all", fv: "all" });
+  const [filters, setFilters] = useState({ type: "all", category: "all", subcategoryId: "all", dateFrom: currentMonth() + "-01", dateTo: today(), currency: "all", fv: "all", search: "" });
+  const [evolutionSearch, setEvolutionSearch] = useState("");
   const [expandedTypes, setExpandedTypes] = useState({});
   const [expandedCats, setExpandedCats] = useState({});
 
@@ -1201,16 +1202,22 @@ export default function App() {
   }, [budgets, personMovements, reportMonth, selectedPerson]);
 
   const filteredMovements = useMemo(() => {
+    const q = filters.search.trim().toLowerCase();
     return personMovements.filter((m) => {
       if (filters.type !== "all" && m.type !== filters.type) return false;
       if (filters.category !== "all" && m.category !== filters.category) return false;
+      if (filters.subcategoryId !== "all" && String(m.subcategoryId) !== filters.subcategoryId) return false;
       if (filters.currency !== "all" && m.currency !== filters.currency) return false;
       if (filters.dateFrom && m.date < filters.dateFrom) return false;
       if (filters.dateTo && m.date > filters.dateTo) return false;
       if (filters.fv !== "all" && (m.type !== "Egreso" || getFV(m.type, m.category) !== filters.fv)) return false;
+      if (q) {
+        const haystack = `${m.category} ${subcategoryNameById[m.subcategoryId] || ""} ${m.description || ""} ${m.person}`.toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
       return true;
     });
-  }, [personMovements, filters, getFV]);
+  }, [personMovements, filters, getFV, subcategoryNameById]);
 
   const goalProgress = useMemo(() => {
     return personGoals.filter((g) => g.active !== false).map((g) => {
@@ -1709,8 +1716,17 @@ export default function App() {
                 <Field label="Desde"><Input type="date" value={filters.dateFrom} onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })} /></Field>
                 <Field label="Hasta"><Input type="date" value={filters.dateTo} onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })} /></Field>
                 <Field label="Tipo"><Select value={filters.type} onChange={(v) => setFilters({ ...filters, type: v })}><option value="all">Todos</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                <Field label="Categoría"><Select value={filters.category} onChange={(v) => setFilters({ ...filters, category: v })}><option value="all">Todas</option>{[...new Set(Object.values(categoryMap).flat())].map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+                <Field label="Categoría"><Select value={filters.category} onChange={(v) => setFilters({ ...filters, category: v, subcategoryId: "all" })}><option value="all">Todas</option>{[...new Set(Object.values(categoryMap).flat())].map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+                <Field label="Subcategoría">
+                  <Select value={filters.subcategoryId} onChange={(v) => setFilters({ ...filters, subcategoryId: v })}>
+                    <option value="all">Todas</option>
+                    {subcategoryRows
+                      .filter((s) => filters.category === "all" || categoryRows.find((c) => c.id === s.category_id)?.name === filters.category)
+                      .map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+                  </Select>
+                </Field>
                 <Field label="F/V"><Select value={filters.fv} onChange={(v) => setFilters({ ...filters, fv: v })}><option value="all">Todos</option><option value="F">Fijos</option><option value="V">Variables</option></Select></Field>
+                <Field label="Buscar (categoría, subcategoría, detalle o persona)"><Input value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} placeholder="Ej. Dany" /></Field>
               </div>
               <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <Btn onClick={exportCSV} variant="outline">⬇ Exportar movimientos</Btn>
@@ -2092,9 +2108,14 @@ export default function App() {
               <p className="muted small" style={{ marginBottom: 14 }}>
                 Tocá una categoría para ver el desglose por subcategoría. Verde = bajó, rojo = subió respecto al mes anterior. El filtro de persona aplica desde arriba. Los movimientos sin subcategoría asignada solo cuentan en el total de la categoría.
               </p>
+              <Field label="Buscar categoría o subcategoría"><Input value={evolutionSearch} onChange={(e) => setEvolutionSearch(e.target.value)} placeholder="Ej. Nafta" /></Field>
               {evolutionData.cats.length === 0 && <EmptyState msg="Sin egresos registrados." />}
               {evolutionData.cats.length > 0 && (() => {
-                const { months, cats, result } = evolutionData;
+                const { months, result } = evolutionData;
+                const q = evolutionSearch.trim().toLowerCase();
+                const cats = q
+                  ? evolutionData.cats.filter((cat) => cat.toLowerCase().includes(q) || result[cat].subRows.some((s) => s.desc.toLowerCase().includes(q)))
+                  : evolutionData.cats;
                 // Mostrar últimos 6 meses máximo para que entre en pantalla
                 const visibleMonths = months.slice(-6);
                 return (
