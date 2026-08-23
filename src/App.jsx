@@ -1438,7 +1438,7 @@ export default function App() {
         </div>
 
         <Card>
-          <div className="filter-grid three-col">
+          <div className="filter-grid">
             <Field label="Persona global">
               <Select value={selectedPerson} onChange={setSelectedPerson}>
                 <option value="all">Todas</option>
@@ -1460,6 +1460,24 @@ export default function App() {
                 <option value="USD">USD</option>
               </Select>
             </Field>
+            {tab === "datos" && (
+              <>
+                <Field label="Desde"><Input type="date" value={filters.dateFrom} onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })} /></Field>
+                <Field label="Hasta"><Input type="date" value={filters.dateTo} onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })} /></Field>
+                <Field label="Tipo"><Select value={filters.type} onChange={(v) => setFilters({ ...filters, type: v })}><option value="all">Todos</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
+                <Field label="Categoría"><Select value={filters.category} onChange={(v) => setFilters({ ...filters, category: v, subcategoryId: "all" })}><option value="all">Todas</option>{[...new Set(Object.values(categoryMap).flat())].map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+                <Field label="Subcategoría">
+                  <Select value={filters.subcategoryId} onChange={(v) => setFilters({ ...filters, subcategoryId: v })}>
+                    <option value="all">Todas</option>
+                    {subcategoryRows
+                      .filter((s) => filters.category === "all" || categoryRows.find((c) => c.id === s.category_id)?.name === filters.category)
+                      .map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+                  </Select>
+                </Field>
+                <Field label="F/V"><Select value={filters.fv} onChange={(v) => setFilters({ ...filters, fv: v })}><option value="all">Todos</option><option value="F">Fijos</option><option value="V">Variables</option></Select></Field>
+                <Field label="Buscar"><Input value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} placeholder="Ej. Dany" /></Field>
+              </>
+            )}
           </div>
         </Card>
 
@@ -1802,30 +1820,11 @@ export default function App() {
 
         {tab === "datos" && (
           <div className="tab-content">
-            <Card>
-              <CardHead title="Filtros" icon="🔍" />
-              <div className="filter-grid">
-                <Field label="Desde"><Input type="date" value={filters.dateFrom} onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })} /></Field>
-                <Field label="Hasta"><Input type="date" value={filters.dateTo} onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })} /></Field>
-                <Field label="Tipo"><Select value={filters.type} onChange={(v) => setFilters({ ...filters, type: v })}><option value="all">Todos</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                <Field label="Categoría"><Select value={filters.category} onChange={(v) => setFilters({ ...filters, category: v, subcategoryId: "all" })}><option value="all">Todas</option>{[...new Set(Object.values(categoryMap).flat())].map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
-                <Field label="Subcategoría">
-                  <Select value={filters.subcategoryId} onChange={(v) => setFilters({ ...filters, subcategoryId: v })}>
-                    <option value="all">Todas</option>
-                    {subcategoryRows
-                      .filter((s) => filters.category === "all" || categoryRows.find((c) => c.id === s.category_id)?.name === filters.category)
-                      .map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
-                  </Select>
-                </Field>
-                <Field label="F/V"><Select value={filters.fv} onChange={(v) => setFilters({ ...filters, fv: v })}><option value="all">Todos</option><option value="F">Fijos</option><option value="V">Variables</option></Select></Field>
-                <Field label="Buscar (categoría, subcategoría, detalle o persona)"><Input value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} placeholder="Ej. Dany" /></Field>
-              </div>
-              <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <Btn onClick={exportCSV} variant="outline">⬇ Exportar movimientos</Btn>
-                <Btn onClick={() => exportSection("desviaciones")} variant="outline">⬇ Exportar desviaciones</Btn>
-                <span className="muted small" style={{ alignSelf: "center" }}>{filteredMovements.length} registros</span>
-              </div>
-            </Card>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <Btn onClick={exportCSV} variant="outline" small>⬇ Exportar movimientos</Btn>
+              <Btn onClick={() => exportSection("desviaciones")} variant="outline" small>⬇ Exportar desviaciones</Btn>
+              <span className="muted small">{filteredMovements.length} registros</span>
+            </div>
             <Card>
               <div className="table-wrap">
                 <table className="data-table">
