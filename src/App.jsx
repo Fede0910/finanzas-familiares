@@ -85,6 +85,55 @@ function monthsBetweenInclusive(startDate, endDate) {
   return Math.max(1, (ey - sy) * 12 + (em - sm) + 1);
 }
 
+// Cronograma de amortización simplificado (sin indexación por IPC): sistema francés con cuota fija.
+// Si el préstamo tiene plazo (termMonths) se calcula la cuota; si en cambio tiene una cuota objetivo,
+// se estima cuántos períodos hacen falta para cancelar (equivalente a NPER). Durante los meses de
+// gracia no se cobra cuota y el interés se capitaliza sobre el saldo.
+function computeLoanSchedule(loan) {
+  const principal = Number(loan.principal || 0);
+  const monthlyRate = Number(loan.annualRate || 0) / 12;
+  const grace = Number(loan.graceMonths || 0);
+  const term = loan.termMonths ? Number(loan.termMonths) : null;
+  let installment = loan.targetInstallment ? Number(loan.targetInstallment) : null;
+
+  if (!installment && term) {
+    installment = monthlyRate > 0
+      ? (principal * monthlyRate) / (1 - Math.pow(1 + monthlyRate, -term))
+      : principal / term;
+  }
+  if (!installment) return { installment: 0, rows: [], estimatedTerm: null, canCancel: false };
+
+  const interestFirstPeriod = principal * monthlyRate;
+  let estimatedTerm = term;
+  let canCancel = true;
+  if (!estimatedTerm) {
+    if (monthlyRate === 0) {
+      estimatedTerm = Math.ceil(principal / installment);
+    } else if (installment <= interestFirstPeriod) {
+      canCancel = false;
+      estimatedTerm = null;
+    } else {
+      estimatedTerm = Math.ceil(-Math.log(1 - (principal * monthlyRate) / installment) / Math.log(1 + monthlyRate));
+    }
+  }
+
+  const maxPeriods = Math.min(360, (estimatedTerm || 120) + grace + 1);
+  const dates = generateSeriesDates(loan.startDate, Number(loan.dayOfMonth || 10), maxPeriods);
+  const rows = [];
+  let balance = principal;
+  for (let period = 0; period < maxPeriods; period++) {
+    const interest = balance * monthlyRate;
+    const inGrace = period < grace;
+    const payment = inGrace ? 0 : installment;
+    let principalPortion = inGrace ? 0 : Math.min(payment - interest, balance);
+    let closingBalance = inGrace ? balance + interest : Math.max(0, balance - principalPortion);
+    rows.push({ period: period + 1, date: dates[period], openingBalance: balance, interest, payment, principalPortion, closingBalance });
+    balance = closingBalance;
+    if (!inGrace && balance <= 0.5) break;
+  }
+  return { installment, rows, estimatedTerm, canCancel };
+}
+
 function buildCategoryMap(rows) {
   const map = {};
   rows.forEach((r) => {
@@ -373,6 +422,7 @@ const TABS = [
   { id: "presupuesto", label: "🎯 Presupuesto" },
   { id: "reportes", label: "📈 Reportes" },
   { id: "deudas", label: "💳 Deudas" },
+  { id: "prestamos", label: "🏦 Préstamos" },
   { id: "config", label: "⚙️ Config" },
 ];
 
@@ -391,6 +441,8 @@ export default function App() {
   const [movements, setMovements] = useState([]);
   const [debts, setDebts] = useState([]);
   const [debtPayments, setDebtPayments] = useState([]);
+  const [loans, setLoans] = useState([]); // plata que la familia le presta a un tercero (asset)
+  const [loanPayments, setLoanPayments] = useState([]);
   const [goals, setGoals] = useState([]);
   const [budgets, setBudgets] = useState([]);
   const [monthlyBalances, setMonthlyBalances] = useState([]);
@@ -425,6 +477,12 @@ export default function App() {
   const [goalForm, setGoalForm] = useState({ name: categoryMap["Ahorro"]?.[0] || "", owner: "Compartido", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
   const [budgetForm, setBudgetForm] = useState({ month: currentMonth(), person: "Compartido", type: "Egreso", category: "Supermercado", planned: "" });
   const [debtPayForm, setDebtPayForm] = useState({ debtId: "", date: today(), amount: "", person: "Compartido", notes: "" });
+  const [loanForm, setLoanForm] = useState({
+    name: "", owner: "Compartido", principal: "", annualRate: "", startDate: today(),
+    dayOfMonth: "10", graceMonths: "0", termMonths: "", targetInstallment: "", notes: "",
+  });
+  const [loanPayForm, setLoanPayForm] = useState({ loanId: "", date: today(), amount: "", person: "Compartido", notes: "" });
+  const [expandedLoans, setExpandedLoans] = useState({});
   const [balanceForm, setBalanceForm] = useState({ month: currentMonth(), opening: "", notes: "" });
   const [catalogForm, setCatalogForm] = useState({ person: "", type: "", categoryType: "Egreso", category: "", categoryFv: "V" });
   const [subcatForm, setSubcatForm] = useState({ categoryType: "Egreso", categoryId: "", name: "" });
@@ -441,7 +499,7 @@ export default function App() {
     async function load() {
       setLoading(true);
       try {
-        const [movsR, dbsR, dpsR, glsR, bgsR, mbsR, catsR, categoriesR, subcatsR, cardsR, seriesR] = await Promise.all([
+        const [movsR, dbsR, dpsR, glsR, bgsR, mbsR, catsR, categoriesR, subcatsR, cardsR, seriesR, loansR, loanPaysR] = await Promise.all([
           supabase.from("movements").select("*").order("movement_date", { ascending: false }),
           supabase.from("debts").select("*").order("created_at", { ascending: false }),
           supabase.from("debt_payments").select("*").order("payment_date", { ascending: false }),
@@ -453,6 +511,8 @@ export default function App() {
           supabase.from("subcategories").select("*").eq("active", true).order("category_id").order("name"),
           supabase.from("cards").select("*").eq("active", true).order("name"),
           supabase.from("movement_series").select("*").eq("active", true).order("created_at", { ascending: false }),
+          supabase.from("loans").select("*").order("created_at", { ascending: false }),
+          supabase.from("loan_payments").select("*").order("payment_date", { ascending: false }),
         ]);
 
         const movs = movsR.data || [];
@@ -466,11 +526,23 @@ export default function App() {
         const subcats = subcatsR.data || [];
         const cardsData = cardsR.data || [];
         const seriesData = seriesR.data || [];
+        const loansData = loansR.data || [];
+        const loanPaysData = loanPaysR.data || [];
 
         setMovements(movs.map(mapMovementRow));
         setSubcategoryRows(subcats);
         setCards(cardsData);
         setMovementSeries(seriesData);
+        setLoans(loansData.map((l) => ({
+          id: l.id, name: l.name, owner: l.owner, principal: l.principal, annualRate: l.annual_rate,
+          startDate: l.start_date, dayOfMonth: l.day_of_month, graceMonths: l.grace_months,
+          termMonths: l.term_months, targetInstallment: l.target_installment, notes: l.notes,
+          status: l.status, linkedMovementId: l.linked_movement_id,
+        })));
+        setLoanPayments(loanPaysData.map((p) => ({
+          id: p.id, loanId: p.loan_id, date: p.payment_date, amount: p.amount, person: p.person,
+          notes: p.notes, linkedMovementId: p.linked_movement_id,
+        })));
 
         setDebts(dbs.map((d) => ({
           id: d.id, name: d.name, owner: d.owner, balance: d.current_balance, initialBalance: d.initial_balance,
@@ -894,6 +966,68 @@ export default function App() {
     setSaving(false);
   }
 
+  // Préstamos: plata que la familia le da a un tercero (a diferencia de Deudas, que es lo que la
+  // familia debe). Al otorgar uno se descuenta el capital como Inversión > Prestamos.
+  async function addLoan() {
+    if (!loanForm.name || !loanForm.principal || !loanForm.startDate) return;
+    if (!loanForm.termMonths && !loanForm.targetInstallment) return;
+    setSaving(true);
+    const principal = Number(loanForm.principal);
+    const { data, error } = await supabase.from("loans").insert([{
+      name: loanForm.name, owner: loanForm.owner, principal, annual_rate: Number(loanForm.annualRate || 0) / 100,
+      start_date: loanForm.startDate, day_of_month: Number(loanForm.dayOfMonth || 10), grace_months: Number(loanForm.graceMonths || 0),
+      term_months: loanForm.termMonths ? Number(loanForm.termMonths) : null,
+      target_installment: loanForm.targetInstallment ? Number(loanForm.targetInstallment) : null,
+      notes: loanForm.notes || null, status: "Activo",
+    }]).select().single();
+    if (error || !data) { console.error(error); setSaving(false); return; }
+
+    const { data: mov } = await supabase.from("movements").insert([{
+      movement_date: loanForm.startDate, person: loanForm.owner, type: "Inversión", category: "Prestamos",
+      description: `Préstamo otorgado a ${loanForm.name}`, original_currency: "ARS", original_amount: principal,
+      fx_rate: 1, amount_ars: principal, amount_usd: principal / Math.max(blueRate, 1), payment_method: null,
+      linked_debt_id: null, linked_goal_id: null,
+    }]).select().single();
+    if (mov) {
+      setMovements((prev) => [mapMovementRow(mov), ...prev]);
+      await supabase.from("loans").update({ linked_movement_id: mov.id }).eq("id", data.id);
+    }
+    setLoans((prev) => [{
+      id: data.id, name: data.name, owner: data.owner, principal: data.principal, annualRate: data.annual_rate,
+      startDate: data.start_date, dayOfMonth: data.day_of_month, graceMonths: data.grace_months,
+      termMonths: data.term_months, targetInstallment: data.target_installment, notes: data.notes,
+      status: data.status, linkedMovementId: mov?.id || null,
+    }, ...prev]);
+    setLoanForm({ name: "", owner: "Compartido", principal: "", annualRate: "", startDate: today(), dayOfMonth: "10", graceMonths: "0", termMonths: "", targetInstallment: "", notes: "" });
+    setSaving(false);
+  }
+
+  async function deleteLoan(id) {
+    if (!window.confirm("¿Eliminar este préstamo? No borra el movimiento de desembolso ya cargado.")) return;
+    await supabase.from("loans").delete().eq("id", id);
+    setLoans((prev) => prev.filter((l) => l.id !== id));
+  }
+
+  async function registerLoanPayment() {
+    const loan = loans.find((l) => String(l.id) === String(loanPayForm.loanId));
+    if (!loan || !loanPayForm.amount) return;
+    setSaving(true);
+    const amount = Number(loanPayForm.amount);
+    const { data: mov } = await supabase.from("movements").insert([{
+      movement_date: loanPayForm.date, person: loanPayForm.person, type: "Ingreso", category: "Prestamos",
+      description: `Cobro préstamo - ${loan.name}`, original_currency: "ARS", original_amount: amount,
+      fx_rate: 1, amount_ars: amount, amount_usd: amount / Math.max(blueRate, 1), payment_method: null,
+    }]).select().single();
+    const { data: lp } = await supabase.from("loan_payments").insert([{
+      loan_id: loan.id, payment_date: loanPayForm.date, amount, person: loanPayForm.person,
+      notes: loanPayForm.notes || null, linked_movement_id: mov?.id || null,
+    }]).select().single();
+    if (mov) setMovements((prev) => [mapMovementRow(mov), ...prev]);
+    if (lp) setLoanPayments((prev) => [{ id: lp.id, loanId: lp.loan_id, date: lp.payment_date, amount: lp.amount, person: lp.person, notes: lp.notes, linkedMovementId: lp.linked_movement_id }, ...prev]);
+    setLoanPayForm({ loanId: "", date: today(), amount: "", person: "Compartido", notes: "" });
+    setSaving(false);
+  }
+
   async function addGoal() {
     if (!goalForm.name || !goalForm.target) return;
     const { data, error } = await supabase.from("goals").insert([{
@@ -1075,6 +1209,7 @@ export default function App() {
 
   const personMovements = useMemo(() => movements.filter((m) => selectedPerson === "all" || m.person === selectedPerson), [movements, selectedPerson]);
   const personDebts = useMemo(() => debts.filter((d) => selectedPerson === "all" || d.owner === selectedPerson), [debts, selectedPerson]);
+  const personLoans = useMemo(() => loans.filter((l) => selectedPerson === "all" || l.owner === selectedPerson), [loans, selectedPerson]);
   const personGoals = useMemo(() => goals.filter((g) => selectedPerson === "all" || g.owner === selectedPerson), [goals, selectedPerson]);
 
   const summary = useMemo(() => {
@@ -2283,6 +2418,98 @@ export default function App() {
                     <div className="debt-amounts"><div><span className="muted small">Saldo</span><div className="fw red">{fmtArs(d.balance)}</div></div><div><span className="muted small">Cuota</span><div>{fmtArs(d.installment)}</div></div><div><span className="muted small">Pagado</span><div className="green">{fmtArs(d.totalPaid || 0)}</div></div><div><span className="muted small">Vence día</span><div>{d.dueDay || "—"}</div></div></div>
                     <Progress value={pct} />
                     <div className="muted small" style={{ marginTop: 4 }}>Cancelado: {pct.toFixed(1)}%</div>
+                  </Card>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {tab === "prestamos" && (
+          <div className="tab-content">
+            <div className="two-col">
+              <Card>
+                <CardHead title="Otorgar préstamo" icon="🏦" />
+                <p className="muted small" style={{ marginBottom: 12 }}>Plata que la familia le presta a un tercero (al revés de Deudas). Al otorgarlo se descuenta el capital como Inversión · Prestamos. Completá <strong>Plazo</strong> o <strong>Cuota objetivo</strong> — no hace falta los dos.</p>
+                <div className="form-grid two-col-form">
+                  <Field label="Nombre / a quién"><Input value={loanForm.name} onChange={(e) => setLoanForm({ ...loanForm, name: e.target.value })} placeholder="Ej. Ale" /></Field>
+                  <Field label="Responsable"><Select value={loanForm.owner} onChange={(v) => setLoanForm({ ...loanForm, owner: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                  <Field label="Capital"><Input type="number" value={loanForm.principal} onChange={(e) => setLoanForm({ ...loanForm, principal: e.target.value })} /></Field>
+                  <Field label="TNA (%)"><Input type="number" value={loanForm.annualRate} onChange={(e) => setLoanForm({ ...loanForm, annualRate: e.target.value })} placeholder="Ej. 50" /></Field>
+                  <Field label="Fecha de desembolso"><Input type="date" value={loanForm.startDate} onChange={(e) => setLoanForm({ ...loanForm, startDate: e.target.value })} /></Field>
+                  <Field label="Día de vencimiento"><Input type="number" min="1" max="28" value={loanForm.dayOfMonth} onChange={(e) => setLoanForm({ ...loanForm, dayOfMonth: e.target.value })} /></Field>
+                  <Field label="Meses de gracia"><Input type="number" min="0" value={loanForm.graceMonths} onChange={(e) => setLoanForm({ ...loanForm, graceMonths: e.target.value })} /></Field>
+                  <Field label="Plazo (meses)"><Input type="number" value={loanForm.termMonths} onChange={(e) => setLoanForm({ ...loanForm, termMonths: e.target.value, targetInstallment: "" })} placeholder="Opcional" /></Field>
+                  <Field label="Cuota objetivo"><Input type="number" value={loanForm.targetInstallment} onChange={(e) => setLoanForm({ ...loanForm, targetInstallment: e.target.value, termMonths: "" })} placeholder="Opcional" /></Field>
+                  <Field label="Notas"><Input value={loanForm.notes} onChange={(e) => setLoanForm({ ...loanForm, notes: e.target.value })} /></Field>
+                </div>
+                <div style={{ marginTop: 12 }}><Btn onClick={addLoan} disabled={saving || !loanForm.name || !loanForm.principal || (!loanForm.termMonths && !loanForm.targetInstallment)}>{saving ? "Guardando…" : "＋ Otorgar préstamo"}</Btn></div>
+              </Card>
+              <Card>
+                <CardHead title="Registrar cobro de cuota" icon="💰" />
+                <div className="form-grid two-col-form">
+                  <Field label="Préstamo"><Select value={loanPayForm.loanId} onChange={(v) => setLoanPayForm({ ...loanPayForm, loanId: v })}><option value="">Elegir préstamo…</option>{personLoans.map((l) => <option key={l.id} value={String(l.id)}>{l.name}</option>)}</Select></Field>
+                  <Field label="Fecha"><Input type="date" value={loanPayForm.date} onChange={(e) => setLoanPayForm({ ...loanPayForm, date: e.target.value })} /></Field>
+                  <Field label="Importe"><Input type="number" value={loanPayForm.amount} onChange={(e) => setLoanPayForm({ ...loanPayForm, amount: e.target.value })} /></Field>
+                  <Field label="Persona"><Select value={loanPayForm.person} onChange={(v) => setLoanPayForm({ ...loanPayForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                  <Field label="Notas"><Input value={loanPayForm.notes} onChange={(e) => setLoanPayForm({ ...loanPayForm, notes: e.target.value })} /></Field>
+                </div>
+                <div style={{ marginTop: 12 }}><Btn onClick={registerLoanPayment} disabled={saving || !loanPayForm.loanId || !loanPayForm.amount}>{saving ? "Guardando…" : "Registrar cobro"}</Btn></div>
+              </Card>
+            </div>
+            <div className="debt-cards">
+              {personLoans.length === 0 && <EmptyState msg="No hay préstamos otorgados cargados." />}
+              {personLoans.map((loan) => {
+                const collected = loanPayments.filter((p) => p.loanId === loan.id).reduce((a, p) => a + Number(p.amount || 0), 0);
+                const pending = Math.max(0, Number(loan.principal || 0) - collected);
+                const pct = loan.principal > 0 ? (collected / loan.principal) * 100 : 0;
+                const schedule = computeLoanSchedule(loan);
+                const isExpanded = expandedLoans[loan.id];
+                return (
+                  <Card key={loan.id}>
+                    <div className="debt-card-head"><div><div className="fw">{loan.name}</div><div className="muted small">{loan.owner} · TNA {(loan.annualRate * 100).toFixed(0)}% · desde {loan.startDate}</div></div><button className="del-btn" onClick={() => deleteLoan(loan.id)}>🗑</button></div>
+                    <div className="debt-amounts">
+                      <div><span className="muted small">Capital</span><div className="fw">{fmtArs(loan.principal)}</div></div>
+                      <div><span className="muted small">Cuota</span><div>{fmtArs(schedule.installment)}</div></div>
+                      <div><span className="muted small">Cobrado</span><div className="green">{fmtArs(collected)}</div></div>
+                      <div><span className="muted small">Pendiente</span><div className="fw red">{fmtArs(pending)}</div></div>
+                    </div>
+                    <Progress value={pct} />
+                    <div className="muted small" style={{ marginTop: 4 }}>
+                      Cancelado: {pct.toFixed(1)}% · {schedule.canCancel ? `Plazo estimado: ${schedule.estimatedTerm} cuota${schedule.estimatedTerm === 1 ? "" : "s"}` : "⚠️ La cuota objetivo no alcanza a cubrir el interés — nunca se cancela"}
+                    </div>
+                    <div style={{ marginTop: 8 }}>
+                      <button className="del-btn" style={{ borderColor: "#bfdbfe", color: "#1e40af" }} onClick={() => setExpandedLoans((p) => ({ ...p, [loan.id]: !p[loan.id] }))}>
+                        {isExpanded ? "▲ ocultar cronograma" : "▼ ver cronograma planificado"}
+                      </button>
+                    </div>
+                    {isExpanded && (
+                      <div style={{ overflowX: "auto", marginTop: 8 }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
+                          <thead>
+                            <tr>
+                              <th style={{ textAlign: "left", padding: "4px 8px" }}>Cuota</th>
+                              <th style={{ textAlign: "right", padding: "4px 8px" }}>Fecha</th>
+                              <th style={{ textAlign: "right", padding: "4px 8px" }}>Interés</th>
+                              <th style={{ textAlign: "right", padding: "4px 8px" }}>Cuota planificada</th>
+                              <th style={{ textAlign: "right", padding: "4px 8px" }}>Saldo</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {schedule.rows.slice(0, 36).map((r) => (
+                              <tr key={r.period} style={{ borderBottom: "1px solid var(--border)" }}>
+                                <td style={{ padding: "4px 8px" }}>{r.period}</td>
+                                <td style={{ textAlign: "right", padding: "4px 8px" }}>{r.date}</td>
+                                <td style={{ textAlign: "right", padding: "4px 8px" }} className="muted">{fmtArs(r.interest)}</td>
+                                <td style={{ textAlign: "right", padding: "4px 8px" }}>{fmtArs(r.payment)}</td>
+                                <td style={{ textAlign: "right", padding: "4px 8px" }} className="fw">{fmtArs(r.closingBalance)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {schedule.rows.length > 36 && <div className="muted small" style={{ marginTop: 6 }}>Mostrando las primeras 36 cuotas de {schedule.rows.length}.</div>}
+                      </div>
+                    )}
                   </Card>
                 );
               })}
