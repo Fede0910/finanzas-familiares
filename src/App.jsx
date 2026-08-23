@@ -412,7 +412,7 @@ const TABS = [
   { id: "datos", label: "🗂 Datos" },
   { id: "presupuesto", label: "🎯 Presupuesto" },
   { id: "reportes", label: "📈 Reportes" },
-  { id: "deudas", label: "💳 Deudas y Préstamos" },
+  { id: "deudas", label: "🏦 Préstamos" },
   { id: "config", label: "⚙️ Config" },
 ];
 
@@ -458,7 +458,7 @@ export default function App() {
 
   const emptyMovForm = useCallback(() => ({
     date: today(), person: "Federico", type: "", category: "", subcategoryId: "", description: "", originalAmount: "", currency: "ARS",
-    fxRate: blueRate, linkedDebtId: "", linkedGoalId: "", paymentMethod: "", cardId: "", installments: "1",
+    fxRate: blueRate, linkedDebtId: "", linkedGoalId: "", paymentMethod: "Efectivo", cardId: "", installments: "1",
     shared: false, sharedPeople: [],
   }), [blueRate]);
 
@@ -475,7 +475,7 @@ export default function App() {
   const [loanPayForm, setLoanPayForm] = useState({ loanId: "", date: today(), selectedPeriods: [], amount: "", person: "Federico", notes: "" });
   const [loanIncreaseForm, setLoanIncreaseForm] = useState({}); // { [loanId]: { amount, newInstallment } }
   const [expandedLoans, setExpandedLoans] = useState({});
-  const [debtsSubTab, setDebtsSubTab] = useState("deudas"); // "deudas" | "prestamos" — sub-vista dentro de la tab fusionada
+  const [debtsSubTab, setDebtsSubTab] = useState("prestamos"); // "deudas" | "prestamos" — sub-vista dentro de la tab fusionada; Préstamos es la que se usa a diario, Deudas queda como sub-vista secundaria para las 2 deudas históricas casi saldadas
   const [balanceForm, setBalanceForm] = useState({ month: currentMonth(), opening: "", notes: "" });
   const [catalogForm, setCatalogForm] = useState({ person: "", type: "", categoryType: "Egreso", category: "", categoryFv: "V" });
   const [subcatForm, setSubcatForm] = useState({ categoryType: "Egreso", categoryId: "", name: "" });
@@ -1028,8 +1028,15 @@ export default function App() {
   }
 
   async function deleteLoan(id) {
-    if (!window.confirm("¿Eliminar este préstamo? No borra el movimiento de desembolso ya cargado.")) return;
+    const loan = loans.find((l) => l.id === id);
+    if (!window.confirm("¿Eliminar este préstamo? También se borran el desembolso y todos los cobros ya registrados.")) return;
+    const payments = loanPayments.filter((p) => p.loanId === id);
+    const movIdsToDelete = [loan?.linkedMovementId, ...payments.map((p) => p.linkedMovementId)].filter(Boolean);
+    if (movIdsToDelete.length) await supabase.from("movements").delete().in("id", movIdsToDelete);
+    await supabase.from("loan_payments").delete().eq("loan_id", id);
     await supabase.from("loans").delete().eq("id", id);
+    setMovements((prev) => prev.filter((m) => !movIdsToDelete.includes(m.id)));
+    setLoanPayments((prev) => prev.filter((p) => p.loanId !== id));
     setLoans((prev) => prev.filter((l) => l.id !== id));
   }
 
@@ -1273,6 +1280,25 @@ export default function App() {
     const originalInstallment = computeLoanSchedule(selectedLoanForPay).installment;
     return computeLoanSchedule(selectedLoanForPay, { principal: pending, startDate: today(), graceMonths: 0, installment: originalInstallment });
   }, [selectedLoanForPay, loanCollectedById]);
+
+  // Simulación en vivo del préstamo a otorgar: se calcula 100% en el cliente a partir de lo tipeado
+  // en el formulario, sin tocar Supabase — así se puede ver cuota, plazo y ganancia real proyectada
+  // ANTES de decidir otorgarlo. Recién al tocar "Otorgar préstamo" se confirma y se persiste.
+  const loanPreview = useMemo(() => {
+    const principal = Number(loanForm.principal || 0);
+    if (!principal || (!loanForm.termMonths && !loanForm.targetInstallment) || !loanForm.startDate) return null;
+    const virtualLoan = {
+      principal, annualRate: Number(loanForm.annualRate || 0) / 100, startDate: loanForm.startDate,
+      dayOfMonth: Number(loanForm.dayOfMonth || 10), graceMonths: Number(loanForm.graceMonths || 0),
+      termMonths: loanForm.termMonths ? Number(loanForm.termMonths) : null,
+      targetInstallment: loanForm.targetInstallment ? Number(loanForm.targetInstallment) : null,
+    };
+    const schedule = computeLoanSchedule(virtualLoan);
+    if (!schedule.rows.length) return { schedule, gain: null };
+    const gain = computeProjectedRealGain(virtualLoan, schedule, 0, 0, ipcData);
+    return { schedule, gain };
+  }, [loanForm.principal, loanForm.annualRate, loanForm.startDate, loanForm.dayOfMonth, loanForm.graceMonths, loanForm.termMonths, loanForm.targetInstallment, ipcData]);
+
   const personGoals = useMemo(() => goals.filter((g) => selectedPerson === "all" || g.owner === selectedPerson), [goals, selectedPerson]);
 
   const summary = useMemo(() => {
@@ -1578,7 +1604,7 @@ export default function App() {
       <div className="app-container">
         <div className="header">
           <div>
-            <h1 className="app-title">💰 Finanzas Familiares</h1>
+            <h1 className="app-title"><span className="app-title-icon">💰</span> Finanzas Familiares</h1>
             <p className="app-subtitle">Gastos, presupuesto, deudas y metas · Guardado en la nube</p>
           </div>
           <div className="header-controls" />
@@ -2484,8 +2510,8 @@ export default function App() {
         {tab === "deudas" && (
           <div className="tab-content">
             <div className="tabs-list" style={{ marginBottom: -4 }}>
-              <button className={`tab-btn${debtsSubTab === "deudas" ? " active" : ""}`} onClick={() => setDebtsSubTab("deudas")}>💳 Deudas <span className="muted small">(lo que debemos)</span></button>
               <button className={`tab-btn${debtsSubTab === "prestamos" ? " active" : ""}`} onClick={() => setDebtsSubTab("prestamos")}>🏦 Préstamos <span className="muted small">(lo que nos deben)</span></button>
+              <button className={`tab-btn${debtsSubTab === "deudas" ? " active" : ""}`} onClick={() => setDebtsSubTab("deudas")}>💳 Deudas <span className="muted small">(histórico, lo que debemos)</span></button>
             </div>
 
             {debtsSubTab === "deudas" && (
@@ -2557,7 +2583,26 @@ export default function App() {
                 Tasas de referencia (TNA) relevadas en {REFERENCE_LOAN_RATES_DATE} para elegir un valor intermedio — varían según banco y perfil, no son una cotización exacta:{" "}
                 {REFERENCE_LOAN_RATES.map((r, i) => <span key={r.name}>{i > 0 ? " · " : ""}{r.name}: <strong>{r.tna}%</strong></span>)}
               </InfoBox>
-              <div style={{ marginTop: 12 }}><Btn onClick={addLoan} disabled={saving || !loanForm.name || !loanForm.principal || (!loanForm.termMonths && !loanForm.targetInstallment)}>{saving ? "Guardando…" : "＋ Otorgar préstamo"}</Btn></div>
+
+              {loanPreview && (
+                <InfoBox color="green">
+                  <strong>📋 Simulación (pendiente de aceptar — todavía no se guardó nada):</strong>
+                  <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: "6px 18px" }}>
+                    <span>Cuota: <strong>{money(loanPreview.schedule.installment)}</strong></span>
+                    <span>Plazo estimado: <strong>{loanPreview.schedule.estimatedTerm ?? "—"} meses</strong></span>
+                    {!loanPreview.schedule.canCancel && <span style={{ color: "var(--red)" }}>⚠️ La cuota no alcanza a cubrir el interés: nunca se cancela.</span>}
+                    {loanPreview.gain && (
+                      <>
+                        <span>Ganancia nominal proyectada: <strong>{money(loanPreview.gain.nominalGain)}</strong></span>
+                        <span>Ganancia real proyectada (ajustada por IPC): <strong style={{ color: loanPreview.gain.realGain >= 0 ? "var(--green)" : "var(--red)" }}>{money(loanPreview.gain.realGain)}</strong></span>
+                      </>
+                    )}
+                  </div>
+                  <div className="muted small" style={{ marginTop: 6 }}>Si te sirve así, tocá <strong>Otorgar préstamo</strong> para recién ahí confirmarlo y descontar el capital. Podés seguir ajustando los datos mientras no lo confirmes.</div>
+                </InfoBox>
+              )}
+
+              <div style={{ marginTop: 12 }}><Btn onClick={addLoan} disabled={saving || !loanForm.name || !loanForm.principal || (!loanForm.termMonths && !loanForm.targetInstallment)}>{saving ? "Guardando…" : "✓ Aceptar y otorgar préstamo"}</Btn></div>
             </Card>
             <div className="debt-cards">
               {personLoans.length === 0 && <EmptyState msg="No hay préstamos otorgados cargados." />}

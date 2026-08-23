@@ -48,7 +48,8 @@ body {
   display: flex; justify-content: space-between; align-items: flex-start;
   gap: 16px; flex-wrap: wrap; padding: 8px 0;
 }
-.app-title { font-family: "Manrope", "Inter", sans-serif; font-size: 2.1rem; font-weight: 800; letter-spacing: -0.5px; color: var(--text); background: linear-gradient(135deg, #ffffff 0%, #fca5a5 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.app-title { font-family: "Manrope", "Inter", sans-serif; font-size: 2.1rem; font-weight: 800; letter-spacing: -0.5px; color: var(--text); display: inline-flex; align-items: center; gap: 10px; }
+.app-title-icon { display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 12px; background: var(--primary); font-size: 1.4rem; line-height: 1; flex-shrink: 0; }
 .app-subtitle { color: var(--muted); font-size: 0.9rem; margin-top: 4px; }
 .card-title { font-family: "Manrope", "Inter", sans-serif; }
 .header-controls { display: flex; gap: 8px; align-items: center; }
@@ -306,6 +307,7 @@ body {
 
 @media (max-width: 780px) {
   .app-title { font-size: 1.6rem; }
+  .app-title-icon { width: 34px; height: 34px; border-radius: 10px; font-size: 1.1rem; }
   .two-col { grid-template-columns: 1fr; }
   .debt-cards { grid-template-columns: 1fr; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
