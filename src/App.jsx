@@ -89,19 +89,22 @@ function monthsBetweenInclusive(startDate, endDate) {
 // Si el préstamo tiene plazo (termMonths) se calcula la cuota; si en cambio tiene una cuota objetivo,
 // se estima cuántos períodos hacen falta para cancelar (equivalente a NPER). Durante los meses de
 // gracia no se cobra cuota y el interés se capitaliza sobre el saldo.
-function computeLoanSchedule(loan) {
-  const principal = Number(loan.principal || 0);
+// `overrides` permite proyectar el cronograma desde un saldo/fecha/cuota distintos al alta original
+// (por ejemplo, desde el saldo real pendiente hoy, o simulando una cuota nueva tras una ampliación).
+function computeLoanSchedule(loan, overrides = {}) {
+  const principal = Number(overrides.principal ?? loan.principal ?? 0);
   const monthlyRate = Number(loan.annualRate || 0) / 12;
-  const grace = Number(loan.graceMonths || 0);
-  const term = loan.termMonths ? Number(loan.termMonths) : null;
-  let installment = loan.targetInstallment ? Number(loan.targetInstallment) : null;
+  const grace = Number(overrides.graceMonths ?? loan.graceMonths ?? 0);
+  const startDate = overrides.startDate || loan.startDate;
+  const term = !overrides.installment && loan.termMonths ? Number(loan.termMonths) : null;
+  let installment = overrides.installment != null ? Number(overrides.installment) : (loan.targetInstallment ? Number(loan.targetInstallment) : null);
 
   if (!installment && term) {
     installment = monthlyRate > 0
       ? (principal * monthlyRate) / (1 - Math.pow(1 + monthlyRate, -term))
       : principal / term;
   }
-  if (!installment) return { installment: 0, rows: [], estimatedTerm: null, canCancel: false };
+  if (!installment || principal <= 0) return { installment: installment || 0, rows: [], estimatedTerm: term, canCancel: !!term };
 
   const interestFirstPeriod = principal * monthlyRate;
   let estimatedTerm = term;
@@ -118,7 +121,7 @@ function computeLoanSchedule(loan) {
   }
 
   const maxPeriods = Math.min(360, (estimatedTerm || 120) + grace + 1);
-  const dates = generateSeriesDates(loan.startDate, Number(loan.dayOfMonth || 10), maxPeriods);
+  const dates = generateSeriesDates(startDate, Number(loan.dayOfMonth || 10), maxPeriods);
   const rows = [];
   let balance = principal;
   for (let period = 0; period < maxPeriods; period++) {
@@ -132,6 +135,20 @@ function computeLoanSchedule(loan) {
     if (!inGrace && balance <= 0.5) break;
   }
   return { installment, rows, estimatedTerm, canCancel };
+}
+
+// Factor acumulado de inflación (IPC INDEC) entre dos fechas, para llevar un pago a "pesos de la
+// fecha de desembolso" y así comparar la ganancia real de un préstamo, no solo la nominal.
+function ipcFactorBetween(ipcRows, fromDate, toDate) {
+  const fromMonth = monthKey(fromDate);
+  const toMonth = monthKey(toDate);
+  if (!ipcRows.length || toMonth <= fromMonth) return 1;
+  let factor = 1;
+  ipcRows.forEach((r) => {
+    const mo = r.fecha.slice(0, 7);
+    if (mo > fromMonth && mo <= toMonth) factor *= 1 + Number(r.valor) / 100;
+  });
+  return factor;
 }
 
 function buildCategoryMap(rows) {
@@ -391,6 +408,7 @@ export default function App() {
   const [blueRate, setBlueRate] = useState(1250);
   const [blueUpdatedAt, setBlueUpdatedAt] = useState("");
   const [fxStatus, setFxStatus] = useState("idle");
+  const [ipcData, setIpcData] = useState([]); // [{ fecha, valor }] variación mensual IPC en %
   const [displayCurrency, setDisplayCurrency] = useState("ARS");
 
   const [loading, setLoading] = useState(true);
@@ -422,7 +440,8 @@ export default function App() {
     name: "", owner: "Federico", principal: "", annualRate: "", startDate: today(),
     dayOfMonth: "10", graceMonths: "0", termMonths: "", targetInstallment: "", notes: "",
   });
-  const [loanPayForm, setLoanPayForm] = useState({ loanId: "", date: today(), amount: "", person: "Federico", notes: "" });
+  const [loanPayForm, setLoanPayForm] = useState({ loanId: "", date: today(), selectedPeriods: [], amount: "", person: "Federico", notes: "" });
+  const [loanIncreaseForm, setLoanIncreaseForm] = useState({}); // { [loanId]: { amount, newInstallment } }
   const [expandedLoans, setExpandedLoans] = useState({});
   const [balanceForm, setBalanceForm] = useState({ month: currentMonth(), opening: "", notes: "" });
   const [catalogForm, setCatalogForm] = useState({ person: "", type: "", categoryType: "Egreso", category: "", categoryFv: "V" });
@@ -540,6 +559,21 @@ export default function App() {
       }
     }
     fetchBlue();
+  }, []);
+
+  // IPC mensual (INDEC) para calcular la ganancia real de los préstamos otorgados, ajustada por inflación.
+  useEffect(() => {
+    async function fetchIpc() {
+      try {
+        const res = await fetch("https://api.argentinadatos.com/v1/finanzas/indices/inflacion");
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        if (Array.isArray(data)) setIpcData(data);
+      } catch {
+        // sin conexión al índice: la ganancia real de préstamos simplemente no se muestra
+      }
+    }
+    fetchIpc();
   }, []);
 
   const getFV = useCallback((type, category) => categoryFVMap[`${type}__${category}`] || "V", [categoryFVMap]);
@@ -982,7 +1016,31 @@ export default function App() {
     }]).select().single();
     if (mov) setMovements((prev) => [mapMovementRow(mov), ...prev]);
     if (lp) setLoanPayments((prev) => [{ id: lp.id, loanId: lp.loan_id, date: lp.payment_date, amount: lp.amount, person: lp.person, notes: lp.notes, linkedMovementId: lp.linked_movement_id }, ...prev]);
-    setLoanPayForm({ loanId: "", date: today(), amount: "", person: "Federico", notes: "" });
+    setLoanPayForm({ loanId: "", date: today(), selectedPeriods: [], amount: "", person: "Federico", notes: "" });
+    setSaving(false);
+  }
+
+  // Ampliar un préstamo activo: suma capital extra (queda reflejado en el saldo pendiente) y opcionalmente
+  // redefine la cuota para el tramo que sigue. Genera un movimiento de desembolso adicional.
+  async function increaseLoan(loan) {
+    const form = loanIncreaseForm[loan.id];
+    const extra = Number(form?.amount || 0);
+    if (!extra) return;
+    setSaving(true);
+    const newPrincipal = Number(loan.principal) + extra;
+    const patch = { principal: newPrincipal };
+    if (form?.newInstallment) patch.target_installment = Number(form.newInstallment);
+    const { error } = await supabase.from("loans").update(patch).eq("id", loan.id);
+    if (!error) {
+      const { data: mov } = await supabase.from("movements").insert([{
+        movement_date: today(), person: loan.owner, type: "Inversión", category: "Prestamos",
+        description: `Ampliación de préstamo a ${loan.name}`, original_currency: "ARS", original_amount: extra,
+        fx_rate: 1, amount_ars: extra, amount_usd: extra / Math.max(blueRate, 1), payment_method: null,
+      }]).select().single();
+      if (mov) setMovements((prev) => [mapMovementRow(mov), ...prev]);
+      setLoans((prev) => prev.map((l) => l.id === loan.id ? { ...l, principal: newPrincipal, targetInstallment: form?.newInstallment ? Number(form.newInstallment) : l.targetInstallment } : l));
+      setLoanIncreaseForm((prev) => ({ ...prev, [loan.id]: undefined }));
+    }
     setSaving(false);
   }
 
@@ -1168,6 +1226,20 @@ export default function App() {
   const personMovements = useMemo(() => movements.filter((m) => selectedPerson === "all" || m.person === selectedPerson), [movements, selectedPerson]);
   const personDebts = useMemo(() => debts.filter((d) => selectedPerson === "all" || d.owner === selectedPerson), [debts, selectedPerson]);
   const personLoans = useMemo(() => loans.filter((l) => selectedPerson === "all" || l.owner === selectedPerson), [loans, selectedPerson]);
+  const loanCollectedById = useMemo(() => {
+    const map = {};
+    loanPayments.forEach((p) => { map[p.loanId] = (map[p.loanId] || 0) + Number(p.amount || 0); });
+    return map;
+  }, [loanPayments]);
+  const selectedLoanForPay = loans.find((l) => String(l.id) === String(loanPayForm.loanId));
+  const loanForwardScheduleForPay = useMemo(() => {
+    if (!selectedLoanForPay) return null;
+    const pending = Math.max(0, Number(selectedLoanForPay.principal || 0) - (loanCollectedById[selectedLoanForPay.id] || 0));
+    // Mantiene la cuota original del préstamo (no la recalcula para el plazo de alta) y proyecta
+    // cuántos períodos hacen falta desde el saldo real pendiente.
+    const originalInstallment = computeLoanSchedule(selectedLoanForPay).installment;
+    return computeLoanSchedule(selectedLoanForPay, { principal: pending, startDate: today(), graceMonths: 0, installment: originalInstallment });
+  }, [selectedLoanForPay, loanCollectedById]);
   const personGoals = useMemo(() => goals.filter((g) => selectedPerson === "all" || g.owner === selectedPerson), [goals, selectedPerson]);
 
   const summary = useMemo(() => {
@@ -1634,6 +1706,52 @@ export default function App() {
                 <Btn onClick={addTransfer} disabled={saving || !transferForm.fromCategory || !transferForm.toCategory || !transferForm.originalAmount}>{saving ? "Guardando…" : "🔀 Registrar transferencia"}</Btn>
               </div>
             </Card>
+
+            {loans.length > 0 && (
+              <Card>
+                <CardHead title="Cobrar cuota de préstamo" icon="🏦" />
+                <div className="form-grid three-col">
+                  <Field label="Préstamo">
+                    <Select value={loanPayForm.loanId} onChange={(v) => setLoanPayForm({ ...loanPayForm, loanId: v, selectedPeriods: [], amount: "" })}>
+                      <option value="">Elegir préstamo…</option>
+                      {personLoans.map((l) => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
+                    </Select>
+                  </Field>
+                  <Field label="Fecha"><Input type="date" value={loanPayForm.date} onChange={(e) => setLoanPayForm({ ...loanPayForm, date: e.target.value })} /></Field>
+                  <Field label="Persona"><Select value={loanPayForm.person} onChange={(v) => setLoanPayForm({ ...loanPayForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                </div>
+                {selectedLoanForPay && loanForwardScheduleForPay?.rows.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <div className="field-label" style={{ marginBottom: 6 }}>Tocá las cuotas que se están cancelando ahora</div>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      {loanForwardScheduleForPay.rows.slice(0, 6).map((r) => {
+                        const checked = loanPayForm.selectedPeriods.includes(r.period);
+                        return (
+                          <label key={r.period} className="tag" style={{ cursor: "pointer", background: checked ? "var(--primary)" : "var(--primary-light)", color: checked ? "#fff" : "var(--primary)" }}>
+                            <input
+                              type="checkbox" checked={checked} style={{ marginRight: 4 }}
+                              onChange={(e) => {
+                                const nextPeriods = e.target.checked
+                                  ? [...loanPayForm.selectedPeriods, r.period]
+                                  : loanPayForm.selectedPeriods.filter((p) => p !== r.period);
+                                const sum = loanForwardScheduleForPay.rows.filter((row) => nextPeriods.includes(row.period)).reduce((a, row) => a + row.payment, 0);
+                                setLoanPayForm({ ...loanPayForm, selectedPeriods: nextPeriods, amount: sum ? String(Math.round(sum)) : "" });
+                              }}
+                            />
+                            {r.date} · {fmtArs(r.payment)}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                <div className="form-grid three-col" style={{ marginTop: 12 }}>
+                  <Field label="Importe a registrar"><Input type="number" value={loanPayForm.amount} onChange={(e) => setLoanPayForm({ ...loanPayForm, amount: e.target.value })} placeholder="0" /></Field>
+                  <Field label="Notas"><Input value={loanPayForm.notes || ""} onChange={(e) => setLoanPayForm({ ...loanPayForm, notes: e.target.value })} /></Field>
+                </div>
+                <div style={{ marginTop: 12 }}><Btn onClick={registerLoanPayment} disabled={saving || !loanPayForm.loanId || !loanPayForm.amount}>{saving ? "Guardando…" : "＋ Registrar cobro"}</Btn></div>
+              </Card>
+            )}
           </div>
         )}
 
@@ -2380,44 +2498,39 @@ export default function App() {
 
         {tab === "prestamos" && (
           <div className="tab-content">
-            <div className="two-col">
-              <Card>
-                <CardHead title="Otorgar préstamo" icon="🏦" />
-                <p className="muted small" style={{ marginBottom: 12 }}>Plata que la familia le presta a un tercero (al revés de Deudas). Al otorgarlo se descuenta el capital como Inversión · Prestamos. Completá <strong>Plazo</strong> o <strong>Cuota objetivo</strong> — no hace falta los dos.</p>
-                <div className="form-grid two-col-form">
-                  <Field label="Nombre / a quién"><Input value={loanForm.name} onChange={(e) => setLoanForm({ ...loanForm, name: e.target.value })} placeholder="Ej. Ale" /></Field>
-                  <Field label="Responsable"><Select value={loanForm.owner} onChange={(v) => setLoanForm({ ...loanForm, owner: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
-                  <Field label="Capital"><Input type="number" value={loanForm.principal} onChange={(e) => setLoanForm({ ...loanForm, principal: e.target.value })} /></Field>
-                  <Field label="TNA (%)"><Input type="number" value={loanForm.annualRate} onChange={(e) => setLoanForm({ ...loanForm, annualRate: e.target.value })} placeholder="Ej. 50" /></Field>
-                  <Field label="Fecha de desembolso"><Input type="date" value={loanForm.startDate} onChange={(e) => setLoanForm({ ...loanForm, startDate: e.target.value })} /></Field>
-                  <Field label="Día de vencimiento"><Input type="number" min="1" max="28" value={loanForm.dayOfMonth} onChange={(e) => setLoanForm({ ...loanForm, dayOfMonth: e.target.value })} /></Field>
-                  <Field label="Meses de gracia"><Input type="number" min="0" value={loanForm.graceMonths} onChange={(e) => setLoanForm({ ...loanForm, graceMonths: e.target.value })} /></Field>
-                  <Field label="Plazo (meses)"><Input type="number" value={loanForm.termMonths} onChange={(e) => setLoanForm({ ...loanForm, termMonths: e.target.value, targetInstallment: "" })} placeholder="Opcional" /></Field>
-                  <Field label="Cuota objetivo"><Input type="number" value={loanForm.targetInstallment} onChange={(e) => setLoanForm({ ...loanForm, targetInstallment: e.target.value, termMonths: "" })} placeholder="Opcional" /></Field>
-                  <Field label="Notas"><Input value={loanForm.notes} onChange={(e) => setLoanForm({ ...loanForm, notes: e.target.value })} /></Field>
-                </div>
-                <div style={{ marginTop: 12 }}><Btn onClick={addLoan} disabled={saving || !loanForm.name || !loanForm.principal || (!loanForm.termMonths && !loanForm.targetInstallment)}>{saving ? "Guardando…" : "＋ Otorgar préstamo"}</Btn></div>
-              </Card>
-              <Card>
-                <CardHead title="Registrar cobro de cuota" icon="💰" />
-                <div className="form-grid two-col-form">
-                  <Field label="Préstamo"><Select value={loanPayForm.loanId} onChange={(v) => setLoanPayForm({ ...loanPayForm, loanId: v })}><option value="">Elegir préstamo…</option>{personLoans.map((l) => <option key={l.id} value={String(l.id)}>{l.name}</option>)}</Select></Field>
-                  <Field label="Fecha"><Input type="date" value={loanPayForm.date} onChange={(e) => setLoanPayForm({ ...loanPayForm, date: e.target.value })} /></Field>
-                  <Field label="Importe"><Input type="number" value={loanPayForm.amount} onChange={(e) => setLoanPayForm({ ...loanPayForm, amount: e.target.value })} /></Field>
-                  <Field label="Persona"><Select value={loanPayForm.person} onChange={(v) => setLoanPayForm({ ...loanPayForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
-                  <Field label="Notas"><Input value={loanPayForm.notes} onChange={(e) => setLoanPayForm({ ...loanPayForm, notes: e.target.value })} /></Field>
-                </div>
-                <div style={{ marginTop: 12 }}><Btn onClick={registerLoanPayment} disabled={saving || !loanPayForm.loanId || !loanPayForm.amount}>{saving ? "Guardando…" : "Registrar cobro"}</Btn></div>
-              </Card>
-            </div>
+            <Card>
+              <CardHead title="Otorgar préstamo" icon="🏦" />
+              <p className="muted small" style={{ marginBottom: 12 }}>Plata que la familia le presta a un tercero (al revés de Deudas). Al otorgarlo se descuenta el capital como Inversión · Prestamos. Completá <strong>Plazo</strong> o <strong>Cuota objetivo</strong> — no hace falta los dos. Los cobros de cuota se registran desde la solapa <strong>Cargar</strong>.</p>
+              <div className="form-grid three-col">
+                <Field label="Nombre / a quién"><Input value={loanForm.name} onChange={(e) => setLoanForm({ ...loanForm, name: e.target.value })} placeholder="Ej. Ale" /></Field>
+                <Field label="Responsable"><Select value={loanForm.owner} onChange={(v) => setLoanForm({ ...loanForm, owner: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                <Field label="Capital"><Input type="number" value={loanForm.principal} onChange={(e) => setLoanForm({ ...loanForm, principal: e.target.value })} /></Field>
+                <Field label="TNA (%)"><Input type="number" value={loanForm.annualRate} onChange={(e) => setLoanForm({ ...loanForm, annualRate: e.target.value })} placeholder="Ej. 50" /></Field>
+                <Field label="Fecha de desembolso"><Input type="date" value={loanForm.startDate} onChange={(e) => setLoanForm({ ...loanForm, startDate: e.target.value })} /></Field>
+                <Field label="Día de vencimiento"><Input type="number" min="1" max="28" value={loanForm.dayOfMonth} onChange={(e) => setLoanForm({ ...loanForm, dayOfMonth: e.target.value })} /></Field>
+                <Field label="Meses de gracia"><Input type="number" min="0" value={loanForm.graceMonths} onChange={(e) => setLoanForm({ ...loanForm, graceMonths: e.target.value })} /></Field>
+                <Field label="Plazo (meses)"><Input type="number" value={loanForm.termMonths} onChange={(e) => setLoanForm({ ...loanForm, termMonths: e.target.value, targetInstallment: "" })} placeholder="Opcional" /></Field>
+                <Field label="Cuota objetivo"><Input type="number" value={loanForm.targetInstallment} onChange={(e) => setLoanForm({ ...loanForm, targetInstallment: e.target.value, termMonths: "" })} placeholder="Opcional" /></Field>
+                <Field label="Notas"><Input value={loanForm.notes} onChange={(e) => setLoanForm({ ...loanForm, notes: e.target.value })} /></Field>
+              </div>
+              <div style={{ marginTop: 12 }}><Btn onClick={addLoan} disabled={saving || !loanForm.name || !loanForm.principal || (!loanForm.termMonths && !loanForm.targetInstallment)}>{saving ? "Guardando…" : "＋ Otorgar préstamo"}</Btn></div>
+            </Card>
             <div className="debt-cards">
               {personLoans.length === 0 && <EmptyState msg="No hay préstamos otorgados cargados." />}
               {personLoans.map((loan) => {
-                const collected = loanPayments.filter((p) => p.loanId === loan.id).reduce((a, p) => a + Number(p.amount || 0), 0);
+                const collected = loanCollectedById[loan.id] || 0;
                 const pending = Math.max(0, Number(loan.principal || 0) - collected);
                 const pct = loan.principal > 0 ? (collected / loan.principal) * 100 : 0;
-                const schedule = computeLoanSchedule(loan);
+                const schedule = computeLoanSchedule(loan); // plan original, desde el desembolso
+                const remaining = computeLoanSchedule(loan, { principal: pending, startDate: today(), graceMonths: 0, installment: schedule.installment }); // real, desde hoy, misma cuota
+                const realCollected = loanPayments.filter((p) => p.loanId === loan.id).reduce((sum, p) => sum + Number(p.amount || 0) / ipcFactorBetween(ipcData, loan.startDate, p.date), 0);
+                const realGain = realCollected - Number(loan.principal || 0);
                 const isExpanded = expandedLoans[loan.id];
+                const incForm = loanIncreaseForm[loan.id] || { amount: "", newInstallment: "" };
+                const previewIncrease = incForm.amount ? computeLoanSchedule(loan, {
+                  principal: pending + Number(incForm.amount), startDate: today(), graceMonths: 0,
+                  installment: incForm.newInstallment ? Number(incForm.newInstallment) : schedule.installment,
+                }) : null;
                 return (
                   <Card key={loan.id}>
                     <div className="debt-card-head"><div><div className="fw">{loan.name}</div><div className="muted small">{loan.owner} · TNA {(loan.annualRate * 100).toFixed(0)}% · desde {loan.startDate}</div></div><button className="del-btn" onClick={() => deleteLoan(loan.id)}>🗑</button></div>
@@ -2429,13 +2542,39 @@ export default function App() {
                     </div>
                     <Progress value={pct} />
                     <div className="muted small" style={{ marginTop: 4 }}>
-                      Cancelado: {pct.toFixed(1)}% · {schedule.canCancel ? `Plazo estimado: ${schedule.estimatedTerm} cuota${schedule.estimatedTerm === 1 ? "" : "s"}` : "⚠️ La cuota objetivo no alcanza a cubrir el interés — nunca se cancela"}
+                      Cancelado: {pct.toFixed(1)}% · {pending <= 0 ? "Préstamo cancelado" : remaining.canCancel ? `Cuotas restantes desde hoy: ${remaining.estimatedTerm}` : "⚠️ La cuota actual no alcanza a cubrir el interés — nunca se cancela"}
                     </div>
-                    <div style={{ marginTop: 8 }}>
+                    {ipcData.length > 0 && (
+                      <div className="muted small" style={{ marginTop: 2 }}>
+                        Ganancia real (ajustada por IPC): <strong className={realGain >= 0 ? "green" : "red"}>{fmtArs(realGain)}</strong>
+                      </div>
+                    )}
+                    <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
                       <button className="del-btn" style={{ borderColor: "var(--primary)", color: "var(--primary)" }} onClick={() => setExpandedLoans((p) => ({ ...p, [loan.id]: !p[loan.id] }))}>
                         {isExpanded ? "▲ ocultar cronograma" : "▼ ver cronograma planificado"}
                       </button>
+                      <button className="del-btn" style={{ borderColor: "var(--amber)", color: "var(--amber)" }} onClick={() => setLoanIncreaseForm((p) => ({ ...p, [loan.id]: p[loan.id] ? undefined : { amount: "", newInstallment: "" } }))}>
+                        {loanIncreaseForm[loan.id] ? "▲ cancelar ampliación" : "▼ ampliar préstamo"}
+                      </button>
                     </div>
+                    {loanIncreaseForm[loan.id] && (
+                      <div style={{ marginTop: 10, padding: 10, background: "var(--surface-2)", borderRadius: 10 }}>
+                        <p className="muted small" style={{ marginBottom: 8 }}>Piden más plata sobre este préstamo. Poné cuánto más y, si querés, la cuota nueva — te muestro en cuánto quedan las cuotas antes de confirmar.</p>
+                        <div className="form-grid three-col">
+                          <Field label="Importe adicional"><Input type="number" value={incForm.amount} onChange={(e) => setLoanIncreaseForm((p) => ({ ...p, [loan.id]: { ...incForm, amount: e.target.value } }))} /></Field>
+                          <Field label="Cuota nueva (opcional)"><Input type="number" value={incForm.newInstallment} onChange={(e) => setLoanIncreaseForm((p) => ({ ...p, [loan.id]: { ...incForm, newInstallment: e.target.value } }))} placeholder={fmtArs(schedule.installment)} /></Field>
+                        </div>
+                        {previewIncrease && (
+                          <InfoBox color="amber">
+                            Nuevo saldo pendiente: <strong>{fmtArs(pending + Number(incForm.amount))}</strong> · Cuota: <strong>{fmtArs(previewIncrease.installment)}</strong> ·{" "}
+                            {previewIncrease.canCancel ? <>quedarían <strong>{previewIncrease.estimatedTerm}</strong> cuotas.</> : "esa cuota no alcanza a cubrir el interés."}
+                          </InfoBox>
+                        )}
+                        <div style={{ marginTop: 10 }}>
+                          <Btn small onClick={() => increaseLoan(loan)} disabled={saving || !incForm.amount}>{saving ? "Guardando…" : "✓ Confirmar ampliación"}</Btn>
+                        </div>
+                      </div>
+                    )}
                     {isExpanded && (
                       <div style={{ overflowX: "auto", marginTop: 8 }}>
                         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
