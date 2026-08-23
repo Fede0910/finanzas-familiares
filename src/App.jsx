@@ -1086,16 +1086,67 @@ export default function App() {
     return { income, expenses, savings, investments, totalDebt, net: income - expenses - savings - investments };
   }, [personMovements, personDebts]);
 
-  const monthBalance = useMemo(() => {
-    const rec = monthlyBalances.find((b) => b.balance_month === reportMonth);
-    const opening = rec?.opening_balance_ars || 0;
-    const monthMovs = personMovements.filter((m) => monthKey(m.date) === reportMonth);
-    const inc = monthMovs.filter((m) => m.type === "Ingreso").reduce((a, b) => a + b.amountArs, 0);
-    const exp = monthMovs.filter((m) => m.type === "Egreso").reduce((a, b) => a + b.amountArs, 0);
-    const sav = monthMovs.filter((m) => m.type === "Ahorro").reduce((a, b) => a + b.amountArs, 0);
-    const inv = monthMovs.filter((m) => m.type === "Inversión").reduce((a, b) => a + b.amountArs, 0);
-    return { opening, inc, exp, sav, inv, closing: opening + inc - exp - sav - inv };
-  }, [personMovements, monthlyBalances, reportMonth]);
+  // Mapa mes -> {inc,exp,sav,inv} y mes -> fila de monthly_balances, para poder encadenar el saldo
+  // de un mes con el cierre calculado del anterior sin recorrer todo movements en cada paso.
+  const movementsByMonth = useMemo(() => {
+    const map = {};
+    personMovements.forEach((m) => {
+      const k = monthKey(m.date);
+      if (!map[k]) map[k] = { inc: 0, exp: 0, sav: 0, inv: 0 };
+      if (m.type === "Ingreso") map[k].inc += m.amountArs;
+      else if (m.type === "Egreso") map[k].exp += m.amountArs;
+      else if (m.type === "Ahorro") map[k].sav += m.amountArs;
+      else if (m.type === "Inversión") map[k].inv += m.amountArs;
+    });
+    return map;
+  }, [personMovements]);
+  const monthlyBalanceByMonth = useMemo(() => {
+    const map = {};
+    monthlyBalances.forEach((b) => { map[b.balance_month] = b; });
+    return map;
+  }, [monthlyBalances]);
+  const prevMonthKeyOf = (mk) => {
+    const [y, m] = mk.split("-").map(Number);
+    const d = new Date(y, m - 2, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  };
+  // Saldo inicial de un mes: si hay una fila guardada para ese mes (aunque sea "usar este valor" o
+  // la que arma closeMonth), se respeta tal cual. Si no hay fila, se deriva del cierre calculado del
+  // mes anterior (recursivo) — así el saldo arrastra solo aunque nunca se haya guardado a mano.
+  const computeMonthBalance = useCallback((mk, cache = {}) => {
+    if (cache[mk]) return cache[mk];
+    const rec = monthlyBalanceByMonth[mk];
+    const movs = movementsByMonth[mk] || { inc: 0, exp: 0, sav: 0, inv: 0 };
+    let opening;
+    if (rec) {
+      opening = Number(rec.opening_balance_ars || 0);
+    } else {
+      const prevKey = prevMonthKeyOf(mk);
+      const hasPrevData = movementsByMonth[prevKey] || monthlyBalanceByMonth[prevKey];
+      opening = hasPrevData ? computeMonthBalance(prevKey, cache).closing : 0;
+    }
+    const result = { opening, inc: movs.inc, exp: movs.exp, sav: movs.sav, inv: movs.inv, closing: opening + movs.inc - movs.exp - movs.sav - movs.inv };
+    cache[mk] = result;
+    return result;
+  }, [monthlyBalanceByMonth, movementsByMonth]);
+
+  const monthBalance = useMemo(() => computeMonthBalance(reportMonth), [computeMonthBalance, reportMonth]);
+
+  // Sugerencia de presupuesto = promedio del gasto real de los 3 meses previos (persona+tipo+categoría)
+  const budgetAvgSuggestion = useMemo(() => {
+    const [y, m] = budgetForm.month.split("-").map(Number);
+    const months = [1, 2, 3].map((n) => {
+      const d = new Date(y, m - 1 - n, 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    });
+    const totals = months.map((mo) =>
+      personMovements
+        .filter((mv) => monthKey(mv.date) === mo && mv.person === budgetForm.person && mv.type === budgetForm.type && mv.category === budgetForm.category)
+        .reduce((a, mv) => a + mv.amountArs, 0)
+    );
+    if (!totals.some((t) => t > 0)) return null;
+    return Math.round(totals.reduce((a, b) => a + b, 0) / 3);
+  }, [personMovements, budgetForm.month, budgetForm.person, budgetForm.type, budgetForm.category]);
 
   const monthlyExpenseByFV = useMemo(() => {
     const monthEgresos = personMovements.filter((m) => m.type === "Egreso" && monthKey(m.date) === reportMonth);
@@ -1287,16 +1338,7 @@ export default function App() {
   async function closeMonth(month) {
     if (!window.confirm(`¿Cerrar el mes ${month}? No podrás editar movimientos de ese período.`)) return;
     const existing = monthlyBalances.find((b) => b.balance_month === month);
-    const closing = (() => {
-      const rec = monthlyBalances.find((b) => b.balance_month === month);
-      const opening = rec?.opening_balance_ars || 0;
-      const monthMovs = personMovements.filter((m) => monthKey(m.date) === month);
-      const inc = monthMovs.filter((m) => m.type === "Ingreso").reduce((a, b) => a + b.amountArs, 0);
-      const exp = monthMovs.filter((m) => m.type === "Egreso").reduce((a, b) => a + b.amountArs, 0);
-      const sav = monthMovs.filter((m) => m.type === "Ahorro").reduce((a, b) => a + b.amountArs, 0);
-      const inv = monthMovs.filter((m) => m.type === "Inversión").reduce((a, b) => a + b.amountArs, 0);
-      return opening + inc - exp - sav - inv;
-    })();
+    const closing = computeMonthBalance(month).closing;
     // Compute next month
     const [y, mo] = month.split("-").map(Number);
     const nextDate = new Date(y, mo, 1);
@@ -1857,21 +1899,11 @@ export default function App() {
                 <span className="muted small" style={{ paddingRight: 4 }}>{expandedTypes._saldoInicial ? "▲ ocultar" : "▼ editar"}</span>
               </div>
               {expandedTypes._saldoInicial && (() => {
-                // Compute previous month closing to suggest as opening
-                const prevMonth = (() => {
-                  const [y, m] = balanceForm.month.split("-").map(Number);
-                  const d = new Date(y, m - 2, 1);
-                  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-                })();
-                const prevRec = monthlyBalances.find((b) => b.balance_month === prevMonth);
-                const prevOpening = prevRec?.opening_balance_ars || 0;
-                const prevMovs = personMovements.filter((m) => monthKey(m.date) === prevMonth);
-                const prevInc = prevMovs.filter((m) => m.type === "Ingreso").reduce((a, b) => a + b.amountArs, 0);
-                const prevExp = prevMovs.filter((m) => m.type === "Egreso").reduce((a, b) => a + b.amountArs, 0);
-                const prevSav = prevMovs.filter((m) => m.type === "Ahorro").reduce((a, b) => a + b.amountArs, 0);
-                const prevInv = prevMovs.filter((m) => m.type === "Inversión").reduce((a, b) => a + b.amountArs, 0);
-                const suggestedOpening = prevOpening + prevInc - prevExp - prevSav - prevInv;
-                const hasSuggestion = prevInc > 0 || prevExp > 0 || prevOpening > 0;
+                // Cierre calculado del mes anterior (encadenado), sugerido como saldo inicial
+                const prevMonth = prevMonthKeyOf(balanceForm.month);
+                const prevBalance = computeMonthBalance(prevMonth);
+                const suggestedOpening = prevBalance.closing;
+                const hasSuggestion = prevBalance.inc > 0 || prevBalance.exp > 0 || prevBalance.opening > 0;
                 return (
                   <>
                     <div className="form-grid three-col">
@@ -1916,6 +1948,15 @@ export default function App() {
                 <Field label="Categoría"><Select value={budgetForm.category} onChange={(v) => setBudgetForm({ ...budgetForm, category: v })}>{(categoryMap[budgetForm.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
                 <Field label="Importe presupuestado"><Input type="number" value={budgetForm.planned} onChange={(e) => setBudgetForm({ ...budgetForm, planned: e.target.value })} placeholder="0" /></Field>
               </div>
+              {budgetAvgSuggestion !== null && (
+                <InfoBox color="blue">
+                  Promedio real de los últimos 3 meses para <strong>{budgetForm.category}</strong> · {budgetForm.person}: <strong>{fmtArs(budgetAvgSuggestion)}</strong> ·{" "}
+                  <button
+                    onClick={() => setBudgetForm((f) => ({ ...f, planned: String(budgetAvgSuggestion) }))}
+                    style={{ background: "none", border: "none", color: "#1e40af", fontWeight: 700, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}
+                  >Usar este valor</button>
+                </InfoBox>
+              )}
               <div style={{ marginTop: 12 }}><Btn onClick={addBudget}>＋ Agregar línea</Btn></div>
             </Card>
 
