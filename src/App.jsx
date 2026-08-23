@@ -752,7 +752,9 @@ export default function App() {
   }
 
   // Gasto compartido: reparte el importe total en partes iguales entre las personas elegidas,
-  // un movimiento por persona, todos ligados por shared_group_id.
+  // un movimiento por persona, todos ligados por shared_group_id. Si además es una compra en
+  // tarjeta a varias cuotas, la parte de cada persona se reparte a su vez en N movimientos
+  // mensuales (con su propia serie), manteniendo el shared_group_id común a todo el grupo.
   async function addSharedMovement() {
     const total = Number(movForm.originalAmount);
     const peopleList = movForm.sharedPeople;
@@ -763,15 +765,58 @@ export default function App() {
     const subcategoryId = movForm.subcategoryId ? Number(movForm.subcategoryId) : null;
     const groupId = crypto.randomUUID();
     const cardId = movForm.paymentMethod === "Tarjeta" && movForm.cardId ? Number(movForm.cardId) : null;
+    const installments = Number(movForm.installments);
+    const isCardInstallments = movForm.paymentMethod === "Tarjeta" && cardId && installments > 1;
 
-    const rows = peopleList.map((person, i) => {
-      const originalAmount = i === n - 1 ? Math.round((total - share * (n - 1)) * 100) / 100 : share;
-      const amountArs = toArs(originalAmount, movForm.currency, rate);
-      const amountUsd = movForm.currency === "USD" ? originalAmount : amountArs / Math.max(blueRate, 1);
+    const peopleShares = peopleList.map((person, i) => ({
+      person, amount: i === n - 1 ? Math.round((total - share * (n - 1)) * 100) / 100 : share,
+    }));
+
+    if (isCardInstallments) {
+      const dayOfMonth = Number(movForm.date.split("-")[2]);
+      const dates = generateSeriesDates(movForm.date, dayOfMonth, installments);
+      const newSeries = [];
+      const allRows = [];
+      for (const { person, amount } of peopleShares) {
+        const perInstallment = Math.round((amount / installments) * 100) / 100;
+        const { data: seriesRow, error: seriesErr } = await supabase.from("movement_series").insert([{
+          kind: "tarjeta_cuotas", person, type: movForm.type, category: movForm.category,
+          subcategory_id: subcategoryId, description: movForm.description || null, currency: movForm.currency,
+          installment_amount: perInstallment, installments_total: installments, day_of_month: dayOfMonth,
+          start_date: movForm.date, end_date: dates[dates.length - 1], card_id: cardId, payment_method: "Tarjeta", active: true,
+        }]).select().single();
+        if (seriesErr || !seriesRow) { console.error(seriesErr); continue; }
+        newSeries.push(seriesRow);
+        dates.forEach((d, i) => {
+          const originalAmount = i === installments - 1 ? Math.round((amount - perInstallment * (installments - 1)) * 100) / 100 : perInstallment;
+          const amountArs = toArs(originalAmount, movForm.currency, rate);
+          const amountUsd = movForm.currency === "USD" ? originalAmount : amountArs / Math.max(blueRate, 1);
+          allRows.push({
+            movement_date: d, person, type: movForm.type, category: movForm.category,
+            subcategory_id: subcategoryId, description: movForm.description ? `${movForm.description} (cuota ${i + 1}/${installments})` : `Cuota ${i + 1}/${installments}`,
+            original_currency: movForm.currency, original_amount: originalAmount, fx_rate: rate,
+            amount_ars: amountArs, amount_usd: amountUsd, payment_method: "Tarjeta",
+            linked_debt_id: null, linked_goal_id: null, card_id: cardId, series_id: seriesRow.id, installment_no: i + 1,
+            shared_group_id: groupId,
+          });
+        });
+      }
+      if (!allRows.length) return;
+      const { data, error } = await supabase.from("movements").insert(allRows).select();
+      if (error) { console.error(error); return; }
+      if (data) setMovements((prev) => [...data.map(mapMovementRow), ...prev]);
+      if (newSeries.length) setMovementSeries((prev) => [...newSeries, ...prev]);
+      setMovForm(emptyMovForm());
+      return;
+    }
+
+    const rows = peopleShares.map(({ person, amount }) => {
+      const amountArs = toArs(amount, movForm.currency, rate);
+      const amountUsd = movForm.currency === "USD" ? amount : amountArs / Math.max(blueRate, 1);
       return {
         movement_date: movForm.date, person, type: movForm.type, category: movForm.category,
         subcategory_id: subcategoryId, description: movForm.description || null,
-        original_currency: movForm.currency, original_amount: originalAmount, fx_rate: rate,
+        original_currency: movForm.currency, original_amount: amount, fx_rate: rate,
         amount_ars: amountArs, amount_usd: amountUsd, payment_method: movForm.paymentMethod || null,
         linked_debt_id: null, linked_goal_id: null, card_id: cardId, shared_group_id: groupId,
       };
@@ -1768,10 +1813,20 @@ export default function App() {
               </div>
               {selectedDebtForMov && movForm.category === "Deuda" && <InfoBox color="blue">Cuota sugerida: <strong>{fmtArs(selectedDebtForMov.installment)}</strong> · Saldo pendiente: <strong>{fmtArs(selectedDebtForMov.balance)}</strong>.</InfoBox>}
               {movForm.currency === "USD" && <InfoBox color="amber">Cotización blue del momento: <strong>{money(blueRate)}</strong> por USD · Importe en ARS: <strong>{money(toArs(movForm.originalAmount || 0, "USD", blueRate))}</strong></InfoBox>}
-              {movForm.paymentMethod === "Tarjeta" && Number(movForm.installments) > 1 && movForm.originalAmount && (
+              {movForm.paymentMethod === "Tarjeta" && Number(movForm.installments) > 1 && movForm.originalAmount && movForm.shared && movForm.sharedPeople.length >= 2 && (() => {
+                const n = movForm.sharedPeople.length;
+                const share = Number(movForm.originalAmount) / n;
+                const perInstallment = share / Number(movForm.installments);
+                return (
+                  <InfoBox color="blue">
+                    Se reparte en partes iguales entre <strong>{movForm.sharedPeople.join(", ")}</strong>: <strong>{money(share, movForm.currency)}</strong> cada uno · y la parte de cada uno se cobra en <strong>{movForm.installments} cuotas mensuales</strong> de <strong>{money(perInstallment, movForm.currency)}</strong>, empezando el {movForm.date}.
+                  </InfoBox>
+                );
+              })()}
+              {movForm.paymentMethod === "Tarjeta" && Number(movForm.installments) > 1 && movForm.originalAmount && !(movForm.shared && movForm.sharedPeople.length >= 2) && (
                 <InfoBox color="blue">Se van a crear <strong>{movForm.installments} movimientos mensuales</strong> de <strong>{money(Number(movForm.originalAmount) / Number(movForm.installments), movForm.currency)}</strong> cada uno, empezando el {movForm.date}.</InfoBox>
               )}
-              {movForm.shared && movForm.sharedPeople.length >= 2 && movForm.originalAmount && (
+              {!(movForm.paymentMethod === "Tarjeta" && Number(movForm.installments) > 1) && movForm.shared && movForm.sharedPeople.length >= 2 && movForm.originalAmount && (
                 <InfoBox color="blue">Se reparte en partes iguales entre <strong>{movForm.sharedPeople.join(", ")}</strong>: <strong>{money(Number(movForm.originalAmount) / movForm.sharedPeople.length, movForm.currency)}</strong> cada uno.</InfoBox>
               )}
               {movForm.shared && movForm.sharedPeople.length < 2 && (
