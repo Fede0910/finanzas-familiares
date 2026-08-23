@@ -432,6 +432,7 @@ export default function App() {
     currency: "ARS", amount: "", dayOfMonth: "10", startDate: today(),
   });
   const [seriesEndDateInputs, setSeriesEndDateInputs] = useState({}); // seriesId -> fecha elegida para truncar
+  const [reconcileForm, setReconcileForm] = useState({ cardId: "", month: currentMonth(), statementTotal: "" });
   const [copyBudgetMsg, setCopyBudgetMsg] = useState("");
 
   useEffect(() => {
@@ -542,6 +543,15 @@ export default function App() {
     cards.forEach((c) => { map[c.id] = c.name; });
     return map;
   }, [cards]);
+
+  const reconcileMovements = useMemo(() => {
+    if (!reconcileForm.cardId) return [];
+    return movements
+      .filter((m) => String(m.cardId) === String(reconcileForm.cardId) && monthKey(m.date) === reconcileForm.month)
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }, [movements, reconcileForm.cardId, reconcileForm.month]);
+  const reconcileSum = useMemo(() => reconcileMovements.reduce((a, m) => a + Number(m.amountArs || 0), 0), [reconcileMovements]);
+  const reconcileDiff = reconcileForm.statementTotal !== "" ? Number(reconcileForm.statementTotal) - reconcileSum : null;
   const amountDisplay = useCallback((m) => displayCurrency === "USD" ? Number(m.amountUsd || 0) : Number(m.amountArs || 0), [displayCurrency]);
   const fmt = useCallback((value) => money(value, displayCurrency), [displayCurrency]);
   const fmtArs = useCallback((value) => money(value, "ARS"), []);
@@ -714,6 +724,29 @@ export default function App() {
     await truncateSeries(series, today());
     await supabase.from("movement_series").update({ active: false }).eq("id", series.id);
     setMovementSeries((prev) => prev.filter((s) => s.id !== series.id));
+  }
+
+  // Conciliación de resumen de tarjeta: registra la diferencia entre lo cargado y el total del resumen
+  // (mayormente impuestos) como un gasto en la categoría "Impuestos Tarjetas".
+  async function registerCardDifference() {
+    const cardId = Number(reconcileForm.cardId);
+    if (!cardId || reconcileDiff === null || reconcileDiff <= 0) return;
+    setSaving(true);
+    const [y, m] = reconcileForm.month.split("-").map(Number);
+    const date = `${reconcileForm.month}-${String(daysInMonth(y, m)).padStart(2, "0")}`;
+    const row = {
+      movement_date: date, person: "Compartido", type: "Egreso", category: "Impuestos Tarjetas",
+      subcategory_id: null, description: `Diferencia resumen · ${cardNameById[cardId] || "tarjeta"} · ${reconcileForm.month}`,
+      original_currency: "ARS", original_amount: reconcileDiff, fx_rate: 1, amount_ars: reconcileDiff,
+      amount_usd: reconcileDiff / Math.max(blueRate, 1), payment_method: "Tarjeta",
+      linked_debt_id: null, linked_goal_id: null, card_id: cardId,
+    };
+    const { data, error } = await supabase.from("movements").insert([row]).select().single();
+    if (!error && data) {
+      setMovements((prev) => [mapMovementRow(data), ...prev]);
+      setReconcileForm((f) => ({ ...f, statementTotal: "" }));
+    }
+    setSaving(false);
   }
 
   async function addTransfer() {
@@ -1417,6 +1450,42 @@ export default function App() {
                   </div>
                 );
               })}
+            </Card>
+
+            <Card>
+              <CardHead title="Conciliación de resumen de tarjeta" icon="🧾" />
+              <p className="muted small" style={{ marginBottom: 12 }}>Elegí la tarjeta y el mes para ver qué cargaste. Si falta algo, cargalo en "Cargar". Cuando esté completo, poné el total del resumen del banco: la diferencia (mayormente impuestos) se registra sola como gasto en "Impuestos Tarjetas".</p>
+              <div className="form-grid three-col">
+                <Field label="Tarjeta">
+                  <Select value={reconcileForm.cardId} onChange={(v) => setReconcileForm({ ...reconcileForm, cardId: v })}>
+                    <option value="">Elegir tarjeta…</option>
+                    {cards.map((c) => <option key={c.id} value={String(c.id)}>{c.name}{c.owner ? ` · ${c.owner}` : ""}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Mes"><Input type="month" value={reconcileForm.month} onChange={(e) => setReconcileForm({ ...reconcileForm, month: e.target.value })} /></Field>
+                <Field label="Total según resumen del banco"><Input type="number" value={reconcileForm.statementTotal} onChange={(e) => setReconcileForm({ ...reconcileForm, statementTotal: e.target.value })} placeholder="0" /></Field>
+              </div>
+              {reconcileForm.cardId && (
+                <>
+                  {reconcileMovements.length === 0 && <EmptyState msg="No hay movimientos cargados con esta tarjeta en ese mes." />}
+                  {reconcileMovements.map((m) => (
+                    <div key={m.id} className="report-row"><div>{m.date} · {m.category}{m.description ? ` · ${m.description}` : ""}</div><strong>{fmtArs(m.amountArs)}</strong></div>
+                  ))}
+                  <div className="report-row total"><div>Total cargado</div><strong>{fmtArs(reconcileSum)}</strong></div>
+                  {reconcileDiff !== null && (
+                    <>
+                      <InfoBox color={reconcileDiff > 0 ? "blue" : "amber"}>
+                        {reconcileDiff > 0
+                          ? <>Diferencia a registrar: <strong>{fmtArs(reconcileDiff)}</strong> (resumen − cargado).</>
+                          : <>El total cargado ya cubre o supera el resumen ({fmtArs(reconcileSum)} vs {fmtArs(Number(reconcileForm.statementTotal))}). Revisá que no haya algo duplicado antes de seguir.</>}
+                      </InfoBox>
+                      <div style={{ marginTop: 12 }}>
+                        <Btn onClick={registerCardDifference} disabled={saving || reconcileDiff <= 0}>{saving ? "Guardando…" : "Registrar diferencia como gasto de tarjeta"}</Btn>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
             </Card>
           </div>
         )}
