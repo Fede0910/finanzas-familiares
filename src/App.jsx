@@ -1454,26 +1454,20 @@ export default function App() {
             <Card>
               <CardHead title="Transferencia entre tipos" icon="🔀" />
               <p className="muted small" style={{ marginBottom: 12 }}>Movés plata de un tipo a otro (ej. Ahorro → Inversión). Se crean dos movimientos automáticamente.</p>
-              <div className="form-grid">
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
                 <Field label="Fecha"><Input type="date" value={transferForm.date} onChange={(e) => setTransferForm({ ...transferForm, date: e.target.value })} /></Field>
                 <Field label="Persona"><Select value={transferForm.person} onChange={(v) => setTransferForm({ ...transferForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                <Field label="De"><Select value={transferForm.fromType} onChange={(v) => setTransferForm({ ...transferForm, fromType: v, fromCategory: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
+                <Field label="Categoría"><Select value={transferForm.fromCategory} onChange={(v) => setTransferForm({ ...transferForm, fromCategory: v })}><option value="">Seleccionar…</option>{(categoryMap[transferForm.fromType] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+                <div style={{ fontSize: "1.2rem", paddingBottom: 9, color: "var(--muted)" }}>→</div>
+                <Field label="A"><Select value={transferForm.toType} onChange={(v) => setTransferForm({ ...transferForm, toType: v, toCategory: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
+                <Field label="Categoría"><Select value={transferForm.toCategory} onChange={(v) => setTransferForm({ ...transferForm, toCategory: v })}><option value="">Seleccionar…</option>{(categoryMap[transferForm.toType] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
                 <Field label="Moneda"><Select value={transferForm.currency} onChange={(v) => setTransferForm({ ...transferForm, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
                 <Field label={`Importe (${transferForm.currency})`}><Input type="number" value={transferForm.originalAmount} onChange={(e) => setTransferForm({ ...transferForm, originalAmount: e.target.value })} placeholder="0" /></Field>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 12, alignItems: "end", margin: "14px 0" }}>
-                <div style={{ display: "grid", gap: 8, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 12 }}>
-                  <div className="field-label" style={{ color: "#dc2626" }}>⬆ Origen (resta de…)</div>
-                  <Field label="Tipo"><Select value={transferForm.fromType} onChange={(v) => setTransferForm({ ...transferForm, fromType: v, fromCategory: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                  <Field label="Categoría"><Select value={transferForm.fromCategory} onChange={(v) => setTransferForm({ ...transferForm, fromCategory: v })}><option value="">Seleccionar…</option>{(categoryMap[transferForm.fromType] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
-                </div>
-                <div style={{ textAlign: "center", fontSize: "1.5rem", paddingBottom: 8 }}>→</div>
-                <div style={{ display: "grid", gap: 8, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: 12 }}>
-                  <div className="field-label" style={{ color: "#16a34a" }}>⬇ Destino (suma a…)</div>
-                  <Field label="Tipo"><Select value={transferForm.toType} onChange={(v) => setTransferForm({ ...transferForm, toType: v, toCategory: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                  <Field label="Categoría"><Select value={transferForm.toCategory} onChange={(v) => setTransferForm({ ...transferForm, toCategory: v })}><option value="">Seleccionar…</option>{(categoryMap[transferForm.toType] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
-                </div>
+              <div style={{ marginTop: 10 }}>
+                <Field label="Descripción (opcional)"><Input value={transferForm.description} onChange={(e) => setTransferForm({ ...transferForm, description: e.target.value })} placeholder={`Ej. Paso fondos de ${transferForm.fromCategory || "origen"} a ${transferForm.toCategory || "destino"}`} /></Field>
               </div>
-              <Field label="Descripción (opcional)"><Input value={transferForm.description} onChange={(e) => setTransferForm({ ...transferForm, description: e.target.value })} placeholder={`Ej. Paso fondos de ${transferForm.fromCategory || "origen"} a ${transferForm.toCategory || "destino"}`} /></Field>
               {transferForm.originalAmount && transferForm.fromCategory && transferForm.toCategory && (
                 <InfoBox color="blue">Se crearán 2 movimientos por <strong>{transferForm.currency === "USD" ? money(transferForm.originalAmount, "USD") : money(toArs(transferForm.originalAmount, "ARS", 1))}</strong>: un egreso de <strong>{transferForm.fromCategory}</strong> ({transferForm.fromType}) y un ingreso en <strong>{transferForm.toCategory}</strong> ({transferForm.toType}).</InfoBox>
               )}
