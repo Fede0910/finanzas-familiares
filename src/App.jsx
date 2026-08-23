@@ -7,7 +7,7 @@ const supabase = createClient(
 );
 
 const DEFAULT_PEOPLE = ["Federico", "Mica", "Santy", "Compartido"];
-const DEFAULT_PAYMENT_METHODS = ["Banco", "Tarjeta", "Efectivo", "Mercado Pago", "Transferencia"];
+const PAYMENT_METHODS = ["Banco", "Tarjeta", "Efectivo", "Mercado Pago", "Transferencia"];
 const DEFAULT_TYPES = ["Ingreso", "Egreso", "Ahorro", "Inversión"];
 const DEFAULT_CATEGORY_ROWS = [
   { type: "Ingreso", name: "Sueldo", fv: "V", active: true },
@@ -68,6 +68,17 @@ function buildCategoryFV(rows) {
     if (r.active === false) return;
     map[`${r.type}__${r.name}`] = r.fv || "V";
   });
+  return map;
+}
+
+function buildSubcategoryMap(rows) {
+  const map = {};
+  rows.forEach((r) => {
+    if (r.active === false) return;
+    if (!map[r.category_id]) map[r.category_id] = [];
+    map[r.category_id].push({ id: r.id, name: r.name });
+  });
+  Object.values(map).forEach((list) => list.sort((a, b) => a.name.localeCompare(b.name)));
   return map;
 }
 
@@ -304,7 +315,7 @@ function DescriptionAutocomplete({ value, onChange, suggestions }) {
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <input type="text" value={inputVal} onChange={handleChange} onFocus={() => setOpen(true)}
-        placeholder="Descripción / subcategoría" className="control" autoComplete="off" />
+        placeholder="Detalle (opcional)" className="control" autoComplete="off" />
       {open && filtered.length > 0 && (
         <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 100,
           background: "white", border: "1.5px solid #e2e8f0", borderRadius: 10,
@@ -338,6 +349,9 @@ export default function App() {
   const [categoryRows, setCategoryRows] = useState(DEFAULT_CATEGORY_ROWS);
   const [categoryMap, setCategoryMap] = useState(buildCategoryMap(DEFAULT_CATEGORY_ROWS));
   const [categoryFVMap, setCategoryFVMap] = useState(buildCategoryFV(DEFAULT_CATEGORY_ROWS));
+  const [catalogRows, setCatalogRows] = useState([]); // settings_catalog rows (person/type), con id para poder borrar
+  const [subcategoryRows, setSubcategoryRows] = useState([]); // { id, category_id, name, active }
+  const [cards, setCards] = useState([]); // { id, name, owner, active }
 
   const [movements, setMovements] = useState([]);
   const [debts, setDebts] = useState([]);
@@ -364,8 +378,8 @@ export default function App() {
   const [expandedCats, setExpandedCats] = useState({});
 
   const emptyMovForm = useCallback(() => ({
-    date: today(), person: "Compartido", type: "", category: "", description: "", originalAmount: "", currency: "ARS",
-    fxRate: blueRate, linkedDebtId: "", linkedGoalId: "",
+    date: today(), person: "Compartido", type: "", category: "", subcategoryId: "", description: "", originalAmount: "", currency: "ARS",
+    fxRate: blueRate, linkedDebtId: "", linkedGoalId: "", paymentMethod: "",
   }), [blueRate]);
 
   const [movForm, setMovForm] = useState(emptyMovForm());
@@ -376,13 +390,15 @@ export default function App() {
   const [debtPayForm, setDebtPayForm] = useState({ debtId: "", date: today(), amount: "", person: "Compartido", notes: "" });
   const [balanceForm, setBalanceForm] = useState({ month: currentMonth(), opening: "", notes: "" });
   const [catalogForm, setCatalogForm] = useState({ person: "", type: "", categoryType: "Egreso", category: "", categoryFv: "V" });
+  const [subcatForm, setSubcatForm] = useState({ categoryType: "Egreso", categoryId: "", name: "" });
+  const [cardForm, setCardForm] = useState({ name: "", owner: "Compartido" });
   const [copyBudgetMsg, setCopyBudgetMsg] = useState("");
 
   useEffect(() => {
     async function load() {
       setLoading(true);
       try {
-        const [movsR, dbsR, dpsR, glsR, bgsR, mbsR, catsR, categoriesR] = await Promise.all([
+        const [movsR, dbsR, dpsR, glsR, bgsR, mbsR, catsR, categoriesR, subcatsR, cardsR] = await Promise.all([
           supabase.from("movements").select("*").order("movement_date", { ascending: false }),
           supabase.from("debts").select("*").order("created_at", { ascending: false }),
           supabase.from("debt_payments").select("*").order("payment_date", { ascending: false }),
@@ -391,6 +407,8 @@ export default function App() {
           supabase.from("monthly_balances").select("*").order("balance_month", { ascending: false }),
           supabase.from("settings_catalog").select("*").order("created_at"),
           supabase.from("categories").select("*").eq("active", true).order("type").order("name"),
+          supabase.from("subcategories").select("*").eq("active", true).order("category_id").order("name"),
+          supabase.from("cards").select("*").eq("active", true).order("name"),
         ]);
 
         const movs = movsR.data || [];
@@ -401,12 +419,17 @@ export default function App() {
         const mbs = mbsR.data || [];
         const cats = catsR.data || [];
         const categoriesData = categoriesR.data || [];
+        const subcats = subcatsR.data || [];
+        const cardsData = cardsR.data || [];
 
         setMovements(movs.map((m) => ({
           id: m.id, date: m.movement_date, person: m.person, type: m.type, category: m.category, description: m.description,
           originalAmount: m.original_amount, currency: m.original_currency, fxRate: m.fx_rate, amountArs: m.amount_ars,
           amountUsd: m.amount_usd, paymentMethod: m.payment_method, linkedDebtId: m.linked_debt_id, linkedGoalId: m.linked_goal_id,
+          subcategoryId: m.subcategory_id, cardId: m.card_id, seriesId: m.series_id, installmentNo: m.installment_no, sharedGroupId: m.shared_group_id,
         })));
+        setSubcategoryRows(subcats);
+        setCards(cardsData);
 
         setDebts(dbs.map((d) => ({
           id: d.id, name: d.name, owner: d.owner, balance: d.current_balance, initialBalance: d.initial_balance,
@@ -424,6 +447,7 @@ export default function App() {
         setMonthlyBalances(mbs);
 
         if (cats.length) {
+          setCatalogRows(cats);
           const newPeople = cats.filter((c) => c.catalog_type === "person").map((c) => c.value);
           const newTypes = cats.filter((c) => c.catalog_type === "type").map((c) => c.value);
           if (newPeople.length) setPeople(newPeople);
@@ -465,6 +489,21 @@ export default function App() {
   }, []);
 
   const getFV = useCallback((type, category) => categoryFVMap[`${type}__${category}`] || "V", [categoryFVMap]);
+  const subcategoryMap = useMemo(() => buildSubcategoryMap(subcategoryRows), [subcategoryRows]);
+  const subcategoryNameById = useMemo(() => {
+    const map = {};
+    subcategoryRows.forEach((r) => { map[r.id] = r.name; });
+    return map;
+  }, [subcategoryRows]);
+  const categoryIdFor = useCallback((type, category) => {
+    const row = categoryRows.find((r) => r.type === type && r.name === category);
+    return row ? row.id : null;
+  }, [categoryRows]);
+  const cardNameById = useMemo(() => {
+    const map = {};
+    cards.forEach((c) => { map[c.id] = c.name; });
+    return map;
+  }, [cards]);
   const amountDisplay = useCallback((m) => displayCurrency === "USD" ? Number(m.amountUsd || 0) : Number(m.amountArs || 0), [displayCurrency]);
   const fmt = useCallback((value) => money(value, displayCurrency), [displayCurrency]);
   const fmtArs = useCallback((value) => money(value, "ARS"), []);
@@ -494,13 +533,14 @@ export default function App() {
       person: movForm.person,
       type: movForm.type,
       category: movForm.category,
+      subcategory_id: movForm.subcategoryId ? Number(movForm.subcategoryId) : null,
       description: movForm.description || null,
       original_currency: movForm.currency,
       original_amount: Number(movForm.originalAmount),
       fx_rate: rate,
       amount_ars: amountArs,
       amount_usd: amountUsd,
-      payment_method: null,
+      payment_method: movForm.paymentMethod || null,
       linked_debt_id: movForm.linkedDebtId ? Number(movForm.linkedDebtId) : null,
       linked_goal_id: linkedGoalId,
     };
@@ -509,7 +549,7 @@ export default function App() {
     if (!error && data) {
       const mov = {
         id: data.id, date: data.movement_date, person: data.person, type: data.type, category: data.category,
-        description: data.description, originalAmount: data.original_amount, currency: data.original_currency,
+        subcategoryId: data.subcategory_id, description: data.description, originalAmount: data.original_amount, currency: data.original_currency,
         fxRate: data.fx_rate, amountArs: data.amount_ars, amountUsd: data.amount_usd, paymentMethod: data.payment_method,
         linkedDebtId: data.linked_debt_id, linkedGoalId: data.linked_goal_id,
       };
@@ -741,6 +781,72 @@ export default function App() {
     setCategoryFVMap(buildCategoryFV(nextRows));
   }
 
+  async function addPerson() {
+    const v = catalogForm.person.trim();
+    if (!v || people.includes(v)) { setCatalogForm((f) => ({ ...f, person: "" })); return; }
+    const { data, error } = await supabase.from("settings_catalog").insert([{ catalog_type: "person", value: v }]).select().single();
+    if (error) { console.error(error); return; }
+    setCatalogRows((prev) => [...prev, data]);
+    setPeople((prev) => [...prev, v]);
+    setCatalogForm((f) => ({ ...f, person: "" }));
+  }
+  async function removePerson(name) {
+    const row = catalogRows.find((r) => r.catalog_type === "person" && r.value === name);
+    if (row) await supabase.from("settings_catalog").delete().eq("id", row.id);
+    setCatalogRows((prev) => prev.filter((r) => r.id !== row?.id));
+    setPeople((prev) => prev.filter((p) => p !== name));
+  }
+  async function addType() {
+    const v = catalogForm.type.trim();
+    if (!v || types.includes(v)) { setCatalogForm((f) => ({ ...f, type: "" })); return; }
+    const { data, error } = await supabase.from("settings_catalog").insert([{ catalog_type: "type", value: v }]).select().single();
+    if (error) { console.error(error); return; }
+    setCatalogRows((prev) => [...prev, data]);
+    setTypes((prev) => [...prev, v]);
+    setCatalogForm((f) => ({ ...f, type: "" }));
+  }
+  async function removeType(name) {
+    const row = catalogRows.find((r) => r.catalog_type === "type" && r.value === name);
+    if (row) await supabase.from("settings_catalog").delete().eq("id", row.id);
+    setCatalogRows((prev) => prev.filter((r) => r.id !== row?.id));
+    setTypes((prev) => prev.filter((t) => t !== name));
+  }
+
+  async function addSubcategory() {
+    const categoryId = subcatForm.categoryId ? Number(subcatForm.categoryId) : null;
+    const name = subcatForm.name.trim();
+    if (!categoryId || !name) return;
+    const existing = (subcategoryMap[categoryId] || []).some((s) => s.name.toLowerCase() === name.toLowerCase());
+    if (existing) return;
+    const { data, error } = await supabase.from("subcategories").insert([{ category_id: categoryId, name, active: true }]).select().single();
+    if (error) { console.error(error); return; }
+    setSubcategoryRows((prev) => [...prev, data]);
+    setSubcatForm((f) => ({ ...f, name: "" }));
+  }
+  async function removeSubcategory(row) {
+    const used = movements.some((m) => m.subcategoryId === row.id);
+    if (used) return;
+    const { error } = await supabase.from("subcategories").update({ active: false }).eq("id", row.id);
+    if (error) return;
+    setSubcategoryRows((prev) => prev.filter((r) => r.id !== row.id));
+  }
+
+  async function addCard() {
+    const name = cardForm.name.trim();
+    if (!name) return;
+    const { data, error } = await supabase.from("cards").insert([{ name, owner: cardForm.owner, active: true }]).select().single();
+    if (error) { console.error(error); return; }
+    setCards((prev) => [...prev, data]);
+    setCardForm((f) => ({ ...f, name: "" }));
+  }
+  async function removeCard(row) {
+    const used = movements.some((m) => m.cardId === row.id);
+    if (used) return;
+    const { error } = await supabase.from("cards").update({ active: false }).eq("id", row.id);
+    if (error) return;
+    setCards((prev) => prev.filter((c) => c.id !== row.id));
+  }
+
   const personMovements = useMemo(() => movements.filter((m) => selectedPerson === "all" || m.person === selectedPerson), [movements, selectedPerson]);
   const personDebts = useMemo(() => debts.filter((d) => selectedPerson === "all" || d.owner === selectedPerson), [debts, selectedPerson]);
   const personGoals = useMemo(() => goals.filter((g) => selectedPerson === "all" || g.owner === selectedPerson), [goals, selectedPerson]);
@@ -844,18 +950,18 @@ export default function App() {
       const byMonth = {};
       months.forEach((mo) => { byMonth[mo] = 0; });
       catMovs.forEach((m) => { byMonth[monthKey(m.date)] = (byMonth[monthKey(m.date)] || 0) + amountDisplay(m); });
-      // Subcategorías (descripciones)
-      const descs = [...new Set(catMovs.filter((m) => m.description?.trim()).map((m) => m.description.trim()))].sort();
-      const subRows = descs.map((desc) => {
+      // Subcategorías estandarizadas (catálogo), no texto libre — así son comparables entre meses
+      const subIds = [...new Set(catMovs.filter((m) => m.subcategoryId).map((m) => m.subcategoryId))];
+      const subRows = subIds.map((subId) => {
         const subByMonth = {};
         months.forEach((mo) => { subByMonth[mo] = 0; });
-        catMovs.filter((m) => m.description?.trim() === desc).forEach((m) => { subByMonth[monthKey(m.date)] = (subByMonth[monthKey(m.date)] || 0) + amountDisplay(m); });
-        return { desc, byMonth: subByMonth };
-      });
+        catMovs.filter((m) => m.subcategoryId === subId).forEach((m) => { subByMonth[monthKey(m.date)] = (subByMonth[monthKey(m.date)] || 0) + amountDisplay(m); });
+        return { desc: subcategoryNameById[subId] || `#${subId}`, byMonth: subByMonth };
+      }).sort((a, b) => a.desc.localeCompare(b.desc));
       result[cat] = { byMonth, subRows };
     });
     return { months, cats, result };
-  }, [personMovements, amountDisplay]);
+  }, [personMovements, amountDisplay, subcategoryNameById]);
 
   const budgetComparison = useMemo(() => {
     return budgets
@@ -900,10 +1006,10 @@ export default function App() {
   }, [personGoals, personMovements, reportMonth]);
 
   function exportCSV() {
-    const headers = ["Fecha","Persona","Tipo","Categoría","F/V","Descripción","Moneda","Original","TC","ARS","USD"];
+    const headers = ["Fecha","Persona","Tipo","Categoría","Subcategoría","F/V","Detalle","Medio de pago","Moneda","Original","TC","ARS","USD"];
     const rows = filteredMovements.map((m) => [
-      m.date, m.person, m.type, m.category, m.type === "Egreso" ? getFV(m.type, m.category) : "", m.description || "",
-      m.currency, m.originalAmount, m.fxRate, Number(m.amountArs || 0).toFixed(2), Number(m.amountUsd || 0).toFixed(2),
+      m.date, m.person, m.type, m.category, subcategoryNameById[m.subcategoryId] || "", m.type === "Egreso" ? getFV(m.type, m.category) : "", m.description || "",
+      m.paymentMethod || "", m.currency, m.originalAmount, m.fxRate, Number(m.amountArs || 0).toFixed(2), Number(m.amountUsd || 0).toFixed(2),
     ]);
     downloadCSV([headers, ...rows], `movimientos_${filters.dateFrom}_${filters.dateTo}`);
   }
@@ -1046,13 +1152,21 @@ export default function App() {
               <div className="form-grid">
                 <Field label="Fecha"><Input type="date" value={movForm.date} onChange={(e) => setMovForm({ ...movForm, date: e.target.value })} /></Field>
                 <Field label="Persona"><Select value={movForm.person} onChange={(v) => setMovForm({ ...movForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
-                <Field label="Tipo"><Select value={movForm.type} onChange={(v) => setMovForm({ ...movForm, type: v, category: "", linkedDebtId: "", linkedGoalId: "" })}><option value="">Seleccionar…</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                <Field label="Categoría"><Select value={movForm.category} onChange={(v) => setMovForm({ ...movForm, category: v, linkedDebtId: v !== "Deuda" ? "" : movForm.linkedDebtId })} disabled={!movForm.type}><option value="">Seleccionar…</option>{(categoryMap[movForm.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+                <Field label="Tipo"><Select value={movForm.type} onChange={(v) => setMovForm({ ...movForm, type: v, category: "", subcategoryId: "", linkedDebtId: "", linkedGoalId: "" })}><option value="">Seleccionar…</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
+                <Field label="Categoría"><Select value={movForm.category} onChange={(v) => setMovForm({ ...movForm, category: v, subcategoryId: "", linkedDebtId: v !== "Deuda" ? "" : movForm.linkedDebtId })} disabled={!movForm.type}><option value="">Seleccionar…</option>{(categoryMap[movForm.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
                 {movForm.type === "Egreso" && movForm.category === "Deuda" && <Field label="Deuda"><Select value={movForm.linkedDebtId} onChange={(v) => setMovForm({ ...movForm, linkedDebtId: v, originalAmount: personDebts.find((d) => String(d.id) === String(v))?.installment || "" })}><option value="">Elegir deuda…</option>{personDebts.map((d) => <option key={d.id} value={String(d.id)}>{d.name} ({fmtArs(d.balance)} pendiente)</option>)}</Select></Field>}
+
+                <Field label="Subcategoría">
+                  <Select value={movForm.subcategoryId} onChange={(v) => setMovForm({ ...movForm, subcategoryId: v })} disabled={!movForm.category}>
+                    <option value="">Sin subcategoría</option>
+                    {(subcategoryMap[categoryIdFor(movForm.type, movForm.category)] || []).map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Detalle (opcional)"><DescriptionAutocomplete value={movForm.description} onChange={(v) => setMovForm({ ...movForm, description: v })} suggestions={descriptionSuggestions} /></Field>
+                <Field label="Medio de pago"><Select value={movForm.paymentMethod} onChange={(v) => setMovForm({ ...movForm, paymentMethod: v })}><option value="">Sin especificar</option>{PAYMENT_METHODS.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
 
                 <Field label="Moneda"><Select value={movForm.currency} onChange={(v) => setMovForm({ ...movForm, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
                 <Field label={`Importe${movForm.currency === "USD" ? " (USD)" : " (ARS)"}`}><Input type="number" value={movForm.originalAmount} onChange={(e) => setMovForm({ ...movForm, originalAmount: e.target.value })} placeholder="0" /></Field>
-                <Field label="Descripción / subcategoría"><DescriptionAutocomplete value={movForm.description} onChange={(v) => setMovForm({ ...movForm, description: v })} suggestions={descriptionSuggestions} /></Field>
               </div>
               {selectedDebtForMov && movForm.category === "Deuda" && <InfoBox color="blue">Cuota sugerida: <strong>{fmtArs(selectedDebtForMov.installment)}</strong> · Saldo pendiente: <strong>{fmtArs(selectedDebtForMov.balance)}</strong>.</InfoBox>}
               {movForm.currency === "USD" && <InfoBox color="amber">Cotización blue del momento: <strong>{money(blueRate)}</strong> por USD · Importe en ARS: <strong>{money(toArs(movForm.originalAmount || 0, "USD", blueRate))}</strong></InfoBox>}
@@ -1236,7 +1350,7 @@ export default function App() {
                 <Field label="Desde"><Input type="date" value={filters.dateFrom} onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })} /></Field>
                 <Field label="Hasta"><Input type="date" value={filters.dateTo} onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })} /></Field>
                 <Field label="Tipo"><Select value={filters.type} onChange={(v) => setFilters({ ...filters, type: v })}><option value="all">Todos</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                <Field label="Categoría"><Select value={filters.category} onChange={(v) => setFilters({ ...filters, category: v })}><option value="all">Todas</option>{Object.values(categoryMap).flat().map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+                <Field label="Categoría"><Select value={filters.category} onChange={(v) => setFilters({ ...filters, category: v })}><option value="all">Todas</option>{[...new Set(Object.values(categoryMap).flat())].map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
                 <Field label="F/V"><Select value={filters.fv} onChange={(v) => setFilters({ ...filters, fv: v })}><option value="all">Todos</option><option value="F">Fijos</option><option value="V">Variables</option></Select></Field>
               </div>
               <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1248,7 +1362,7 @@ export default function App() {
             <Card>
               <div className="table-wrap">
                 <table className="data-table">
-                  <thead><tr><th>Fecha</th><th>Persona</th><th>Tipo</th><th>Categoría</th><th>F/V</th><th>Descripción</th><th>Moneda</th><th>Original</th><th>ARS</th><th>USD</th><th></th></tr></thead>
+                  <thead><tr><th>Fecha</th><th>Persona</th><th>Tipo</th><th>Categoría</th><th>Subcategoría</th><th>F/V</th><th>Detalle</th><th>Moneda</th><th>Original</th><th>ARS</th><th>USD</th><th></th></tr></thead>
                   <tbody>
                     {filteredMovements.map((m) => {
                       const isEditing = editingMovId === m.id;
@@ -1258,6 +1372,7 @@ export default function App() {
                           <td>{m.date}</td><td>{m.person}</td>
                           <td><Badge color={m.type === "Ingreso" ? "green" : m.type === "Egreso" ? "red" : m.type === "Ahorro" ? "blue" : "purple"}>{m.type}</Badge></td>
                           <td>{m.category}</td>
+                          <td className="muted">{subcategoryNameById[m.subcategoryId] || "—"}</td>
                           <td>{m.type === "Egreso" ? <Badge color={getFV(m.type, m.category) === "F" ? "red" : "amber"}>{getFV(m.type, m.category)}</Badge> : "—"}</td>
                           <td className="muted">
                             {isEditing
@@ -1302,6 +1417,7 @@ export default function App() {
                         <div>
                           <Badge color={m.type === "Ingreso" ? "green" : m.type === "Egreso" ? "red" : m.type === "Ahorro" ? "blue" : "purple"}>{m.type}</Badge>
                           <span style={{ marginLeft: 8, fontWeight: 700 }}>{m.category}</span>
+                          {subcategoryNameById[m.subcategoryId] && <span className="muted small" style={{ marginLeft: 6 }}>· {subcategoryNameById[m.subcategoryId]}</span>}
                           {m.type === "Egreso" && <Badge color={getFV(m.type, m.category) === "F" ? "red" : "amber"} style={{ marginLeft: 6 }}>{getFV(m.type, m.category)}</Badge>}
                         </div>
                         <div style={{ display: "flex", gap: 4 }}>
@@ -1752,17 +1868,56 @@ export default function App() {
                   <label className="field-label">Personas</label>
                   <div className="catalog-add">
                     <Input value={catalogForm.person} onChange={(e) => setCatalogForm({ ...catalogForm, person: e.target.value })} placeholder="Nueva persona" />
-                    <Btn small onClick={() => { const v = catalogForm.person.trim(); if (v && !people.includes(v)) setPeople([...people, v]); setCatalogForm({ ...catalogForm, person: "" }); }}>+ Agregar</Btn>
+                    <Btn small onClick={addPerson}>+ Agregar</Btn>
                   </div>
-                  <div className="tag-list">{people.map((p) => <span key={p} className="tag">{p}<button onClick={() => setPeople(people.filter((x) => x !== p))}>×</button></span>)}</div>
+                  <div className="tag-list">{people.map((p) => <span key={p} className="tag">{p}<button onClick={() => removePerson(p)}>×</button></span>)}</div>
                 </div>
                 <div className="catalog-section">
                   <label className="field-label">Tipos</label>
                   <div className="catalog-add">
                     <Input value={catalogForm.type} onChange={(e) => setCatalogForm({ ...catalogForm, type: e.target.value })} placeholder="Nuevo tipo" />
-                    <Btn small onClick={() => { const v = catalogForm.type.trim(); if (v && !types.includes(v)) setTypes([...types, v]); setCatalogForm({ ...catalogForm, type: "" }); }}>+ Agregar</Btn>
+                    <Btn small onClick={addType}>+ Agregar</Btn>
                   </div>
-                  <div className="tag-list">{types.map((t) => <span key={t} className="tag">{t}<button onClick={() => setTypes(types.filter((x) => x !== t))}>×</button></span>)}</div>
+                  <div className="tag-list">{types.map((t) => <span key={t} className="tag">{t}<button onClick={() => removeType(t)}>×</button></span>)}</div>
+                </div>
+              </Card>
+              <Card>
+                <CardHead title="Tarjetas" icon="💳" />
+                <div className="form-grid three-col">
+                  <Field label="Nombre"><Input value={cardForm.name} onChange={(e) => setCardForm({ ...cardForm, name: e.target.value })} placeholder="Ej. Visa Banco X" /></Field>
+                  <Field label="Responsable"><Select value={cardForm.owner} onChange={(v) => setCardForm({ ...cardForm, owner: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                </div>
+                <div style={{ marginTop: 12 }}><Btn onClick={addCard}>＋ Agregar tarjeta</Btn></div>
+                <div className="tag-list" style={{ marginTop: 12 }}>
+                  {cards.map((c) => <span key={c.id} className="tag">{c.name} · {c.owner}<button onClick={() => removeCard(c)}>×</button></span>)}
+                  {cards.length === 0 && <span className="muted small">Sin tarjetas cargadas.</span>}
+                </div>
+              </Card>
+              <Card>
+                <CardHead title="Subcategorías" icon="🏷️" />
+                <p className="muted small" style={{ marginBottom: 12 }}>Estandarizan el detalle de un gasto (ej. Supermercado → Verdulería) para poder compararlas correctamente en Reportes.</p>
+                <div className="form-grid three-col">
+                  <Field label="Tipo"><Select value={subcatForm.categoryType} onChange={(v) => setSubcatForm({ ...subcatForm, categoryType: v, categoryId: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
+                  <Field label="Categoría">
+                    <Select value={subcatForm.categoryId} onChange={(v) => setSubcatForm({ ...subcatForm, categoryId: v })}>
+                      <option value="">Seleccionar…</option>
+                      {categoryRows.filter((r) => r.type === subcatForm.categoryType).map((r) => <option key={r.id} value={String(r.id)}>{r.name}</option>)}
+                    </Select>
+                  </Field>
+                  <Field label="Subcategoría"><Input value={subcatForm.name} onChange={(e) => setSubcatForm({ ...subcatForm, name: e.target.value })} placeholder="Nueva subcategoría" /></Field>
+                </div>
+                <div style={{ marginTop: 12 }}><Btn onClick={addSubcategory} disabled={!subcatForm.categoryId || !subcatForm.name.trim()}>＋ Agregar subcategoría</Btn></div>
+                <div style={{ marginTop: 16 }}>
+                  {categoryRows.filter((r) => (subcategoryMap[r.id] || []).length > 0).map((r) => (
+                    <div key={r.id} className="catalog-section">
+                      <label className="field-label">{r.type} · {r.name}</label>
+                      <div className="tag-list">
+                        {(subcategoryMap[r.id] || []).map((s) => (
+                          <span key={s.id} className="tag">{s.name}<button onClick={() => removeSubcategory(s)}>×</button></span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </Card>
               <Card>
