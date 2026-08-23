@@ -52,6 +52,39 @@ const monthKey = (d) => {
 const toArs = (amount, currency, rate) =>
   currency === "USD" ? Number(amount || 0) * Number(rate || 1) : Number(amount || 0);
 
+function mapMovementRow(m) {
+  return {
+    id: m.id, date: m.movement_date, person: m.person, type: m.type, category: m.category,
+    subcategoryId: m.subcategory_id, description: m.description, originalAmount: m.original_amount, currency: m.original_currency,
+    fxRate: m.fx_rate, amountArs: m.amount_ars, amountUsd: m.amount_usd, paymentMethod: m.payment_method,
+    linkedDebtId: m.linked_debt_id, linkedGoalId: m.linked_goal_id, cardId: m.card_id, seriesId: m.series_id,
+    installmentNo: m.installment_no, sharedGroupId: m.shared_group_id,
+  };
+}
+
+const daysInMonth = (year, month) => new Date(year, month, 0).getDate(); // month: 1-12
+
+// Genera `count` fechas mensuales consecutivas a partir del mes de startDate, ancladas al día dayOfMonth
+// (recortado al último día válido de cada mes, ej. día 31 en febrero -> 28).
+function generateSeriesDates(startDate, dayOfMonth, count) {
+  const [sy, sm] = startDate.split("-").map(Number);
+  const dates = [];
+  for (let i = 0; i < count; i++) {
+    const total = (sm - 1) + i;
+    const y = sy + Math.floor(total / 12);
+    const m = (total % 12) + 1;
+    const day = Math.min(dayOfMonth, daysInMonth(y, m));
+    dates.push(`${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
+  }
+  return dates;
+}
+
+function monthsBetweenInclusive(startDate, endDate) {
+  const [sy, sm] = startDate.split("-").map(Number);
+  const [ey, em] = endDate.split("-").map(Number);
+  return Math.max(1, (ey - sy) * 12 + (em - sm) + 1);
+}
+
 function buildCategoryMap(rows) {
   const map = {};
   rows.forEach((r) => {
@@ -334,6 +367,7 @@ function DescriptionAutocomplete({ value, onChange, suggestions }) {
 
 const TABS = [
   { id: "cargar", label: "📥 Cargar" },
+  { id: "recurrentes", label: "🔁 Recurrentes" },
   { id: "dashboard", label: "📊 Dashboard" },
   { id: "datos", label: "🗂 Datos" },
   { id: "presupuesto", label: "🎯 Presupuesto" },
@@ -352,6 +386,7 @@ export default function App() {
   const [catalogRows, setCatalogRows] = useState([]); // settings_catalog rows (person/type), con id para poder borrar
   const [subcategoryRows, setSubcategoryRows] = useState([]); // { id, category_id, name, active }
   const [cards, setCards] = useState([]); // { id, name, owner, active }
+  const [movementSeries, setMovementSeries] = useState([]); // { id, kind, ... } débito automático + cuotas de tarjeta
 
   const [movements, setMovements] = useState([]);
   const [debts, setDebts] = useState([]);
@@ -379,7 +414,7 @@ export default function App() {
 
   const emptyMovForm = useCallback(() => ({
     date: today(), person: "Compartido", type: "", category: "", subcategoryId: "", description: "", originalAmount: "", currency: "ARS",
-    fxRate: blueRate, linkedDebtId: "", linkedGoalId: "", paymentMethod: "",
+    fxRate: blueRate, linkedDebtId: "", linkedGoalId: "", paymentMethod: "", cardId: "", installments: "1",
   }), [blueRate]);
 
   const [movForm, setMovForm] = useState(emptyMovForm());
@@ -392,13 +427,18 @@ export default function App() {
   const [catalogForm, setCatalogForm] = useState({ person: "", type: "", categoryType: "Egreso", category: "", categoryFv: "V" });
   const [subcatForm, setSubcatForm] = useState({ categoryType: "Egreso", categoryId: "", name: "" });
   const [cardForm, setCardForm] = useState({ name: "", owner: "Compartido" });
+  const [debitoForm, setDebitoForm] = useState({
+    person: "Compartido", type: "Egreso", category: "", subcategoryId: "", description: "",
+    currency: "ARS", amount: "", dayOfMonth: "10", startDate: today(),
+  });
+  const [seriesEndDateInputs, setSeriesEndDateInputs] = useState({}); // seriesId -> fecha elegida para truncar
   const [copyBudgetMsg, setCopyBudgetMsg] = useState("");
 
   useEffect(() => {
     async function load() {
       setLoading(true);
       try {
-        const [movsR, dbsR, dpsR, glsR, bgsR, mbsR, catsR, categoriesR, subcatsR, cardsR] = await Promise.all([
+        const [movsR, dbsR, dpsR, glsR, bgsR, mbsR, catsR, categoriesR, subcatsR, cardsR, seriesR] = await Promise.all([
           supabase.from("movements").select("*").order("movement_date", { ascending: false }),
           supabase.from("debts").select("*").order("created_at", { ascending: false }),
           supabase.from("debt_payments").select("*").order("payment_date", { ascending: false }),
@@ -409,6 +449,7 @@ export default function App() {
           supabase.from("categories").select("*").eq("active", true).order("type").order("name"),
           supabase.from("subcategories").select("*").eq("active", true).order("category_id").order("name"),
           supabase.from("cards").select("*").eq("active", true).order("name"),
+          supabase.from("movement_series").select("*").eq("active", true).order("created_at", { ascending: false }),
         ]);
 
         const movs = movsR.data || [];
@@ -421,15 +462,12 @@ export default function App() {
         const categoriesData = categoriesR.data || [];
         const subcats = subcatsR.data || [];
         const cardsData = cardsR.data || [];
+        const seriesData = seriesR.data || [];
 
-        setMovements(movs.map((m) => ({
-          id: m.id, date: m.movement_date, person: m.person, type: m.type, category: m.category, description: m.description,
-          originalAmount: m.original_amount, currency: m.original_currency, fxRate: m.fx_rate, amountArs: m.amount_ars,
-          amountUsd: m.amount_usd, paymentMethod: m.payment_method, linkedDebtId: m.linked_debt_id, linkedGoalId: m.linked_goal_id,
-          subcategoryId: m.subcategory_id, cardId: m.card_id, seriesId: m.series_id, installmentNo: m.installment_no, sharedGroupId: m.shared_group_id,
-        })));
+        setMovements(movs.map(mapMovementRow));
         setSubcategoryRows(subcats);
         setCards(cardsData);
+        setMovementSeries(seriesData);
 
         setDebts(dbs.map((d) => ({
           id: d.id, name: d.name, owner: d.owner, balance: d.current_balance, initialBalance: d.initial_balance,
@@ -511,6 +549,14 @@ export default function App() {
   async function addMovement() {
     if (!movForm.category || !movForm.originalAmount || !movForm.person || !movForm.type) return;
     setSaving(true);
+
+    const isCardInstallments = movForm.paymentMethod === "Tarjeta" && movForm.cardId && Number(movForm.installments) > 1;
+    if (isCardInstallments) {
+      await addCardInstallmentPurchase();
+      setSaving(false);
+      return;
+    }
+
     const rate = movForm.currency === "USD" ? blueRate : 1;
     const amountArs = toArs(movForm.originalAmount, movForm.currency, rate);
     const amountUsd = movForm.currency === "USD" ? Number(movForm.originalAmount) : amountArs / Math.max(blueRate, 1);
@@ -529,6 +575,7 @@ export default function App() {
     }
 
     const row = {
+      card_id: movForm.paymentMethod === "Tarjeta" && movForm.cardId ? Number(movForm.cardId) : null,
       movement_date: movForm.date,
       person: movForm.person,
       type: movForm.type,
@@ -547,13 +594,7 @@ export default function App() {
 
     const { data, error } = await supabase.from("movements").insert([row]).select().single();
     if (!error && data) {
-      const mov = {
-        id: data.id, date: data.movement_date, person: data.person, type: data.type, category: data.category,
-        subcategoryId: data.subcategory_id, description: data.description, originalAmount: data.original_amount, currency: data.original_currency,
-        fxRate: data.fx_rate, amountArs: data.amount_ars, amountUsd: data.amount_usd, paymentMethod: data.payment_method,
-        linkedDebtId: data.linked_debt_id, linkedGoalId: data.linked_goal_id,
-      };
-      setMovements((prev) => [mov, ...prev]);
+      setMovements((prev) => [mapMovementRow(data), ...prev]);
 
       if (movForm.type === "Egreso" && movForm.category === "Deuda" && selectedDebt) {
         const newBalance = Math.max(0, selectedDebt.balance - amountArs);
@@ -574,6 +615,105 @@ export default function App() {
   async function deleteMovement(id) {
     await supabase.from("movements").delete().eq("id", id);
     setMovements((prev) => prev.filter((m) => m.id !== id));
+  }
+
+  // Compra con tarjeta en cuotas: parte el importe total en N movimientos mensuales ligados a una serie.
+  async function addCardInstallmentPurchase() {
+    const n = Number(movForm.installments);
+    const total = Number(movForm.originalAmount);
+    if (!n || n < 2 || !total) return;
+    const dayOfMonth = Number(movForm.date.split("-")[2]);
+    const dates = generateSeriesDates(movForm.date, dayOfMonth, n);
+    const rate = movForm.currency === "USD" ? blueRate : 1;
+    const perInstallment = Math.round((total / n) * 100) / 100;
+    const cardId = Number(movForm.cardId);
+    const subcategoryId = movForm.subcategoryId ? Number(movForm.subcategoryId) : null;
+
+    const { data: seriesRow, error: seriesErr } = await supabase.from("movement_series").insert([{
+      kind: "tarjeta_cuotas", person: movForm.person, type: movForm.type, category: movForm.category,
+      subcategory_id: subcategoryId, description: movForm.description || null, currency: movForm.currency,
+      installment_amount: perInstallment, installments_total: n, day_of_month: dayOfMonth,
+      start_date: movForm.date, end_date: dates[dates.length - 1], card_id: cardId, payment_method: "Tarjeta", active: true,
+    }]).select().single();
+    if (seriesErr || !seriesRow) { console.error(seriesErr); return; }
+
+    const rows = dates.map((d, i) => {
+      const originalAmount = i === n - 1 ? Math.round((total - perInstallment * (n - 1)) * 100) / 100 : perInstallment;
+      const amountArs = toArs(originalAmount, movForm.currency, rate);
+      const amountUsd = movForm.currency === "USD" ? originalAmount : amountArs / Math.max(blueRate, 1);
+      return {
+        movement_date: d, person: movForm.person, type: movForm.type, category: movForm.category,
+        subcategory_id: subcategoryId, description: movForm.description ? `${movForm.description} (cuota ${i + 1}/${n})` : `Cuota ${i + 1}/${n}`,
+        original_currency: movForm.currency, original_amount: originalAmount, fx_rate: rate,
+        amount_ars: amountArs, amount_usd: amountUsd, payment_method: "Tarjeta",
+        linked_debt_id: null, linked_goal_id: null, card_id: cardId, series_id: seriesRow.id, installment_no: i + 1,
+      };
+    });
+    const { data: movRows, error: movErr } = await supabase.from("movements").insert(rows).select();
+    if (movErr) { console.error(movErr); return; }
+    if (movRows) setMovements((prev) => [...movRows.map(mapMovementRow), ...prev]);
+    setMovementSeries((prev) => [seriesRow, ...prev]);
+    setMovForm(emptyMovForm());
+  }
+
+  async function addDebitoAutomatico() {
+    if (!debitoForm.category || !debitoForm.amount || !debitoForm.dayOfMonth || !debitoForm.startDate) return;
+    setSaving(true);
+    const dayOfMonth = Number(debitoForm.dayOfMonth);
+    const yearEnd = `${debitoForm.startDate.slice(0, 4)}-12-31`;
+    const count = monthsBetweenInclusive(debitoForm.startDate, yearEnd);
+    const dates = generateSeriesDates(debitoForm.startDate, dayOfMonth, count);
+    const rate = debitoForm.currency === "USD" ? blueRate : 1;
+    const amountArs = toArs(debitoForm.amount, debitoForm.currency, rate);
+    const amountUsd = debitoForm.currency === "USD" ? Number(debitoForm.amount) : amountArs / Math.max(blueRate, 1);
+    const subcategoryId = debitoForm.subcategoryId ? Number(debitoForm.subcategoryId) : null;
+
+    const { data: seriesRow, error: seriesErr } = await supabase.from("movement_series").insert([{
+      kind: "debito_automatico", person: debitoForm.person, type: debitoForm.type, category: debitoForm.category,
+      subcategory_id: subcategoryId, description: debitoForm.description || null, currency: debitoForm.currency,
+      installment_amount: Number(debitoForm.amount), installments_total: null, day_of_month: dayOfMonth,
+      start_date: debitoForm.startDate, end_date: dates[dates.length - 1], active: true,
+    }]).select().single();
+    if (seriesErr || !seriesRow) { console.error(seriesErr); setSaving(false); return; }
+
+    const rows = dates.map((d) => ({
+      movement_date: d, person: debitoForm.person, type: debitoForm.type, category: debitoForm.category,
+      subcategory_id: subcategoryId, description: debitoForm.description || null,
+      original_currency: debitoForm.currency, original_amount: Number(debitoForm.amount), fx_rate: rate,
+      amount_ars: amountArs, amount_usd: amountUsd, payment_method: null,
+      linked_debt_id: null, linked_goal_id: null, series_id: seriesRow.id,
+    }));
+    const { data: movRows, error: movErr } = await supabase.from("movements").insert(rows).select();
+    if (movErr) { console.error(movErr); setSaving(false); return; }
+    if (movRows) setMovements((prev) => [...movRows.map(mapMovementRow), ...prev]);
+    setMovementSeries((prev) => [seriesRow, ...prev]);
+    setDebitoForm((f) => ({ ...f, amount: "", description: "" }));
+    setSaving(false);
+  }
+
+  // Trunca una serie: actualiza su fecha de fin y borra los movimientos generados posteriores a esa
+  // fecha (respeta los meses ya cerrados, que no se tocan).
+  async function truncateSeries(series, newEndDate) {
+    if (!newEndDate) return;
+    const closedMonths = new Set(monthlyBalances.filter((b) => b.closed).map((b) => b.balance_month));
+    const toDelete = movements.filter((m) => m.seriesId === series.id && m.date > newEndDate);
+    const deletable = toDelete.filter((m) => !closedMonths.has(monthKey(m.date)));
+    const blocked = toDelete.length - deletable.length;
+    if (deletable.length) {
+      await supabase.from("movements").delete().in("id", deletable.map((m) => m.id));
+      const deletedIds = new Set(deletable.map((m) => m.id));
+      setMovements((prev) => prev.filter((m) => !deletedIds.has(m.id)));
+    }
+    await supabase.from("movement_series").update({ end_date: newEndDate }).eq("id", series.id);
+    setMovementSeries((prev) => prev.map((s) => s.id === series.id ? { ...s, end_date: newEndDate } : s));
+    if (blocked > 0) window.alert(`Se actualizó la fecha, pero ${blocked} movimiento(s) no se pudieron borrar porque son de un mes ya cerrado.`);
+  }
+
+  async function deleteSeries(series) {
+    if (!window.confirm("¿Eliminar esta serie? Se borran los movimientos futuros generados (no los que ya pasaron ni los de meses cerrados).")) return;
+    await truncateSeries(series, today());
+    await supabase.from("movement_series").update({ active: false }).eq("id", series.id);
+    setMovementSeries((prev) => prev.filter((s) => s.id !== series.id));
   }
 
   async function addTransfer() {
@@ -1163,13 +1303,27 @@ export default function App() {
                   </Select>
                 </Field>
                 <Field label="Detalle (opcional)"><DescriptionAutocomplete value={movForm.description} onChange={(v) => setMovForm({ ...movForm, description: v })} suggestions={descriptionSuggestions} /></Field>
-                <Field label="Medio de pago"><Select value={movForm.paymentMethod} onChange={(v) => setMovForm({ ...movForm, paymentMethod: v })}><option value="">Sin especificar</option>{PAYMENT_METHODS.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                <Field label="Medio de pago"><Select value={movForm.paymentMethod} onChange={(v) => setMovForm({ ...movForm, paymentMethod: v, cardId: v === "Tarjeta" ? movForm.cardId : "", installments: v === "Tarjeta" ? movForm.installments : "1" })}><option value="">Sin especificar</option>{PAYMENT_METHODS.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                {movForm.paymentMethod === "Tarjeta" && (
+                  <>
+                    <Field label="Tarjeta">
+                      <Select value={movForm.cardId} onChange={(v) => setMovForm({ ...movForm, cardId: v })}>
+                        <option value="">Elegir tarjeta…</option>
+                        {cards.map((c) => <option key={c.id} value={String(c.id)}>{c.name}{c.owner ? ` · ${c.owner}` : ""}</option>)}
+                      </Select>
+                    </Field>
+                    <Field label="Cuotas"><Input type="number" min="1" value={movForm.installments} onChange={(e) => setMovForm({ ...movForm, installments: e.target.value })} placeholder="1" /></Field>
+                  </>
+                )}
 
                 <Field label="Moneda"><Select value={movForm.currency} onChange={(v) => setMovForm({ ...movForm, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
-                <Field label={`Importe${movForm.currency === "USD" ? " (USD)" : " (ARS)"}`}><Input type="number" value={movForm.originalAmount} onChange={(e) => setMovForm({ ...movForm, originalAmount: e.target.value })} placeholder="0" /></Field>
+                <Field label={movForm.paymentMethod === "Tarjeta" && Number(movForm.installments) > 1 ? "Importe total de la compra" : `Importe${movForm.currency === "USD" ? " (USD)" : " (ARS)"}`}><Input type="number" value={movForm.originalAmount} onChange={(e) => setMovForm({ ...movForm, originalAmount: e.target.value })} placeholder="0" /></Field>
               </div>
               {selectedDebtForMov && movForm.category === "Deuda" && <InfoBox color="blue">Cuota sugerida: <strong>{fmtArs(selectedDebtForMov.installment)}</strong> · Saldo pendiente: <strong>{fmtArs(selectedDebtForMov.balance)}</strong>.</InfoBox>}
               {movForm.currency === "USD" && <InfoBox color="amber">Cotización blue del momento: <strong>{money(blueRate)}</strong> por USD · Importe en ARS: <strong>{money(toArs(movForm.originalAmount || 0, "USD", blueRate))}</strong></InfoBox>}
+              {movForm.paymentMethod === "Tarjeta" && Number(movForm.installments) > 1 && movForm.originalAmount && (
+                <InfoBox color="blue">Se van a crear <strong>{movForm.installments} movimientos mensuales</strong> de <strong>{money(Number(movForm.originalAmount) / Number(movForm.installments), movForm.currency)}</strong> cada uno, empezando el {movForm.date}.</InfoBox>
+              )}
               {movForm.type && movForm.category && (movForm.type === "Egreso" || movForm.type === "Ingreso") && (() => {
                 const monthMov = monthKey(movForm.date);
                 const hasBudget = budgets.some((b) => b.month === monthMov && b.person === movForm.person && b.type === movForm.type && b.category === movForm.category);
@@ -1207,6 +1361,62 @@ export default function App() {
               <div style={{ marginTop: 14 }}>
                 <Btn onClick={addTransfer} disabled={saving || !transferForm.fromCategory || !transferForm.toCategory || !transferForm.originalAmount}>{saving ? "Guardando…" : "🔀 Registrar transferencia"}</Btn>
               </div>
+            </Card>
+          </div>
+        )}
+
+        {tab === "recurrentes" && (
+          <div className="tab-content">
+            <Card>
+              <CardHead title="Débito automático — nueva alta" icon="🔁" />
+              <p className="muted small" style={{ marginBottom: 12 }}>Para gastos que se repiten todos los meses (alquiler, suscripciones, seguros). Se generan movimientos automáticamente desde la fecha elegida hasta el 31/12 de ese año. Si necesitás cortarlo antes (por ejemplo, si se dio de baja), lo hacés después desde "Series activas".</p>
+              <div className="form-grid">
+                <Field label="Persona"><Select value={debitoForm.person} onChange={(v) => setDebitoForm({ ...debitoForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                <Field label="Tipo"><Select value={debitoForm.type} onChange={(v) => setDebitoForm({ ...debitoForm, type: v, category: "", subcategoryId: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
+                <Field label="Categoría"><Select value={debitoForm.category} onChange={(v) => setDebitoForm({ ...debitoForm, category: v, subcategoryId: "" })}><option value="">Seleccionar…</option>{(categoryMap[debitoForm.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+                <Field label="Subcategoría">
+                  <Select value={debitoForm.subcategoryId} onChange={(v) => setDebitoForm({ ...debitoForm, subcategoryId: v })} disabled={!debitoForm.category}>
+                    <option value="">Sin subcategoría</option>
+                    {(subcategoryMap[categoryIdFor(debitoForm.type, debitoForm.category)] || []).map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Detalle (opcional)"><Input value={debitoForm.description} onChange={(e) => setDebitoForm({ ...debitoForm, description: e.target.value })} placeholder="Ej. Netflix, Alquiler depto" /></Field>
+                <Field label="Moneda"><Select value={debitoForm.currency} onChange={(v) => setDebitoForm({ ...debitoForm, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
+                <Field label={`Importe${debitoForm.currency === "USD" ? " (USD)" : " (ARS)"}`}><Input type="number" value={debitoForm.amount} onChange={(e) => setDebitoForm({ ...debitoForm, amount: e.target.value })} placeholder="0" /></Field>
+                <Field label="Día del mes"><Input type="number" min="1" max="28" value={debitoForm.dayOfMonth} onChange={(e) => setDebitoForm({ ...debitoForm, dayOfMonth: e.target.value })} /></Field>
+                <Field label="Desde"><Input type="date" value={debitoForm.startDate} onChange={(e) => setDebitoForm({ ...debitoForm, startDate: e.target.value })} /></Field>
+              </div>
+              {debitoForm.amount && debitoForm.category && (
+                <InfoBox color="blue">Se van a crear movimientos el día {debitoForm.dayOfMonth} de cada mes, desde {debitoForm.startDate} hasta el 31/12/{debitoForm.startDate.slice(0, 4)}.</InfoBox>
+              )}
+              <div style={{ marginTop: 12 }}><Btn onClick={addDebitoAutomatico} disabled={saving || !debitoForm.category || !debitoForm.amount}>{saving ? "Guardando…" : "＋ Crear débito automático"}</Btn></div>
+            </Card>
+
+            <Card>
+              <CardHead title="Series activas" icon="📋" />
+              {movementSeries.length === 0 && <EmptyState msg="No hay débitos automáticos ni compras en cuotas activas." />}
+              {movementSeries.map((s) => {
+                const genMovs = movements.filter((m) => m.seriesId === s.id);
+                const pending = genMovs.filter((m) => m.date > today()).length;
+                return (
+                  <div key={s.id} className="budget-inline-row" style={{ flexWrap: "wrap" }}>
+                    <div className="budget-inline-left">
+                      <span className="budget-inline-cat">
+                        {s.kind === "tarjeta_cuotas" ? "💳" : "🔁"} {s.category}
+                        {s.subcategory_id && subcategoryNameById[s.subcategory_id] ? ` · ${subcategoryNameById[s.subcategory_id]}` : ""}
+                      </span>
+                      <span className="muted small">
+                        {s.person} · {money(s.installment_amount, s.currency)}{s.kind === "tarjeta_cuotas" ? ` · cuota ${Math.max(0, (s.installments_total || 0) - pending)}/${s.installments_total} · ${cardNameById[s.card_id] || "tarjeta"}` : ` · día ${s.day_of_month}`} · {s.start_date} → {s.end_date}
+                      </span>
+                    </div>
+                    <div className="budget-inline-right" style={{ gap: 8, alignItems: "center" }}>
+                      <Input type="date" value={seriesEndDateInputs[s.id] || s.end_date} onChange={(e) => setSeriesEndDateInputs((p) => ({ ...p, [s.id]: e.target.value }))} />
+                      <Btn small variant="outline" onClick={() => truncateSeries(s, seriesEndDateInputs[s.id] || s.end_date)}>Definir fin</Btn>
+                      <button className="del-btn" onClick={() => deleteSeries(s)}>🗑</button>
+                    </div>
+                  </div>
+                );
+              })}
             </Card>
           </div>
         )}
