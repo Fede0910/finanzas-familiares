@@ -32,7 +32,7 @@ const DEFAULT_CATEGORY_ROWS = [
   { type: "Inversión", name: "Cripto", fv: "V", active: true },
 ];
 
-const PALETTE = ["#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed", "#0891b2", "#ea580c", "#be185d"];
+const PALETTE = ["#5b9dff", "#34d399", "#fbbf24", "#f87171", "#b39ffb", "#22d3ee", "#fb923c", "#f472b6"];
 
 const money = (n, cur = "ARS") =>
   new Intl.NumberFormat("es-AR", {
@@ -202,7 +202,7 @@ function Badge({ children, color = "blue" }) {
 }
 function Progress({ value }) {
   const pct = Math.min(100, Math.max(0, value));
-  const color = pct > 100 ? "#dc2626" : pct >= 85 ? "#f59e0b" : "#16a34a";
+  const color = pct > 100 ? "#f87171" : pct >= 85 ? "#fbbf24" : "#34d399";
   return <div className="progress-track"><div className="progress-fill" style={{ width: `${pct}%`, background: color }} /></div>;
 }
 function Spinner() { return <div className="spinner" />; }
@@ -226,8 +226,8 @@ function BarChart({ data, xKey, bars, formatter }) {
           const val = maxVal - (maxVal * i) / 4;
           return (
             <g key={i}>
-              <line x1={PL} x2={PL + iW} y1={y} y2={y} stroke="#e2e8f0" strokeWidth="1" />
-              <text x={PL - 6} y={y + 4} textAnchor="end" fontSize="10" fill="#64748b">{formatter ? formatter(val, true) : val.toFixed(0)}</text>
+              <line x1={PL} x2={PL + iW} y1={y} y2={y} stroke="var(--border)" strokeWidth="1" />
+              <text x={PL - 6} y={y + 4} textAnchor="end" fontSize="10" fill="var(--muted)">{formatter ? formatter(val, true) : val.toFixed(0)}</text>
             </g>
           );
         })}
@@ -241,18 +241,18 @@ function BarChart({ data, xKey, bars, formatter }) {
             return (
               <g key={`${di}-${b.key}`}>
                 <rect x={x} y={y} width={barW - 2} height={h} fill={b.color} rx="4" />
-                {val > 0 && <text x={x + (barW - 2) / 2} y={y - 4} textAnchor="middle" fontSize="9" fill="#334155">{formatter ? formatter(val) : val.toFixed(0)}</text>}
+                {val > 0 && <text x={x + (barW - 2) / 2} y={y - 4} textAnchor="middle" fontSize="9" fill="var(--text)">{formatter ? formatter(val) : val.toFixed(0)}</text>}
               </g>
             );
           });
         })}
         {data.map((d, di) => (
-          <text key={di} x={PL + di * gap + gap / 2} y={H - PB + 20} textAnchor="middle" fontSize="10" fill="#64748b">{String(d[xKey]).slice(5)}</text>
+          <text key={di} x={PL + di * gap + gap / 2} y={H - PB + 20} textAnchor="middle" fontSize="10" fill="var(--muted)">{String(d[xKey]).slice(5)}</text>
         ))}
         {bars.map((b, bi) => (
           <g key={b.key} transform={`translate(${PL + bi * 110}, ${H - 14})`}>
             <rect width="10" height="10" fill={b.color} rx="2" />
-            <text x="14" y="9" fontSize="10" fill="#475569">{b.label}</text>
+            <text x="14" y="9" fontSize="10" fill="var(--muted)">{b.label}</text>
           </g>
         ))}
       </svg>
@@ -282,12 +282,12 @@ function PieChart({ data, nameKey, valueKey, formatter }) {
   return (
     <div className="chart-wrap">
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto" }}>
-        {slices.map((s, i) => <path key={i} d={s.path} fill={s.color} stroke="white" strokeWidth="2" />)}
+        {slices.map((s, i) => <path key={i} d={s.path} fill={s.color} stroke="var(--surface)" strokeWidth="2" />)}
         {slices.map((s, i) => (
           <g key={i} transform={`translate(245, ${20 + i * 38})`}>
             <rect width="12" height="12" fill={s.color} rx="2" />
-            <text x="18" y="10" fontSize="10" fill="#1e293b">{s.label}</text>
-            <text x="18" y="24" fontSize="9" fill="#64748b">{(s.pct * 100).toFixed(1)}% · {formatter ? formatter(s.value) : s.value}</text>
+            <text x="18" y="10" fontSize="10" fill="var(--text)">{s.label}</text>
+            <text x="18" y="24" fontSize="9" fill="var(--muted)">{(s.pct * 100).toFixed(1)}% · {formatter ? formatter(s.value) : s.value}</text>
           </g>
         ))}
       </svg>
@@ -316,13 +316,13 @@ function DescriptionAutocomplete({ value, onChange, suggestions }) {
         placeholder="Detalle (opcional)" className="control" autoComplete="off" />
       {open && filtered.length > 0 && (
         <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 100,
-          background: "white", border: "1.5px solid #e2e8f0", borderRadius: 10,
-          boxShadow: "0 4px 16px rgba(0,0,0,.1)", maxHeight: 200, overflowY: "auto", marginTop: 2 }}>
+          background: "var(--surface-2)", border: "1.5px solid var(--border)", borderRadius: 10,
+          boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: 200, overflowY: "auto", marginTop: 2 }}>
           {filtered.map((s) => (
             <div key={s} onMouseDown={() => select(s)}
-              style={{ padding: "9px 14px", cursor: "pointer", fontSize: "0.9rem", borderBottom: "1px solid #f1f5f9" }}
-              onMouseEnter={e => e.currentTarget.style.background = "#eff6ff"}
-              onMouseLeave={e => e.currentTarget.style.background = "white"}>{s}</div>
+              style={{ padding: "9px 14px", cursor: "pointer", fontSize: "0.9rem", borderBottom: "1px solid var(--border)" }}
+              onMouseEnter={e => e.currentTarget.style.background = "var(--primary-light)"}
+              onMouseLeave={e => e.currentTarget.style.background = "var(--surface-2)"}>{s}</div>
           ))}
         </div>
       )}
@@ -333,7 +333,7 @@ function DescriptionAutocomplete({ value, onChange, suggestions }) {
 // Panel de edición completo de un movimiento (todos los campos, no solo importe/detalle).
 function MovementEditPanel({ data, onChange, types, categoryMap, subcategoryMap, categoryIdFor, people, onSave, onCancel }) {
   return (
-    <div className="form-grid" style={{ margin: "8px 0", padding: 10, background: "#f8fafc", borderRadius: 10 }}>
+    <div className="form-grid" style={{ margin: "8px 0", padding: 10, background: "var(--surface-2)", borderRadius: 10 }}>
       <Field label="Fecha"><Input type="date" value={data.date} onChange={(e) => onChange({ ...data, date: e.target.value })} /></Field>
       <Field label="Persona"><Select value={data.person} onChange={(v) => onChange({ ...data, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
       <Field label="Tipo"><Select value={data.type} onChange={(v) => onChange({ ...data, type: v, category: "", subcategoryId: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
@@ -1822,7 +1822,7 @@ export default function App() {
                               const catDesv = key === "Ingreso" ? catReal - catBudget : catBudget - catReal;
                               const catDesvColor = catBudget === 0 ? "var(--muted)" : catDesv >= 0 ? "var(--green)" : "var(--red)";
                               return (
-                                <div key={cat} style={{ display: "grid", gridTemplateColumns: "1fr 90px 90px 80px", gap: 6, alignItems: "center", padding: "7px 14px", background: "#f8fafc", borderBottom: "1px solid var(--border)", fontSize: "0.85rem" }}>
+                                <div key={cat} style={{ display: "grid", gridTemplateColumns: "1fr 90px 90px 80px", gap: 6, alignItems: "center", padding: "7px 14px", background: "var(--surface-2)", borderBottom: "1px solid var(--border)", fontSize: "0.85rem" }}>
                                   <span className="muted" style={{ paddingLeft: 16 }}>{cat}</span>
                                   <span style={{ textAlign: "right", color: "var(--muted)" }}>{catBudget > 0 ? cvt(catBudget) : "—"}</span>
                                   <span style={{ textAlign: "right", fontWeight: 700 }}>{cvt(catReal)}</span>
@@ -1902,7 +1902,7 @@ export default function App() {
                               {!isClosed && (
                                 isEditing
                                   ? <button className="del-btn" onClick={() => setEditingMovId(null)}>✕</button>
-                                  : <button className="del-btn" style={{ borderColor: "#bfdbfe", color: "#1e40af" }} onClick={() => startEditMovement(m)}>✏</button>
+                                  : <button className="del-btn" style={{ borderColor: "var(--primary)", color: "var(--primary)" }} onClick={() => startEditMovement(m)}>✏</button>
                               )}
                               {!isClosed && <button className="del-btn" onClick={() => deleteMovement(m.id)}>🗑</button>}
                               {isClosed && <span className="muted small">🔒</span>}
@@ -1943,7 +1943,7 @@ export default function App() {
                         <div style={{ display: "flex", gap: 4 }}>
                           {!isClosed && (isEditing
                             ? <button className="del-btn" onClick={() => setEditingMovId(null)}>✕</button>
-                            : <button className="del-btn" style={{ borderColor: "#bfdbfe", color: "#1e40af" }} onClick={() => startEditMovement(m)}>✏</button>
+                            : <button className="del-btn" style={{ borderColor: "var(--primary)", color: "var(--primary)" }} onClick={() => startEditMovement(m)}>✏</button>
                           )}
                           {!isClosed && <button className="del-btn" onClick={() => deleteMovement(m.id)}>🗑</button>}
                           {isClosed && <span className="muted small">🔒</span>}
@@ -2004,7 +2004,7 @@ export default function App() {
                         Saldo final de {prevMonth}: <strong>{fmtArs(suggestedOpening)}</strong> · 
                         <button
                           onClick={() => setBalanceForm((f) => ({ ...f, opening: String(Math.round(suggestedOpening)) }))}
-                          style={{ marginLeft: 8, background: "none", border: "none", color: "#1e40af", fontWeight: 700, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}
+                          style={{ marginLeft: 8, background: "none", border: "none", color: "var(--primary)", fontWeight: 700, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}
                         >Usar este valor</button>
                       </InfoBox>
                     )}
@@ -2041,7 +2041,7 @@ export default function App() {
                   Promedio real de {budgetAvgSuggestion.months === 1 ? "el último mes" : `los últimos ${budgetAvgSuggestion.months} meses`} para <strong>{budgetForm.category}</strong> · {budgetForm.person}: <strong>{fmtArs(budgetAvgSuggestion.value)}</strong> ·{" "}
                   <button
                     onClick={() => setBudgetForm((f) => ({ ...f, planned: String(budgetAvgSuggestion.value) }))}
-                    style={{ background: "none", border: "none", color: "#1e40af", fontWeight: 700, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}
+                    style={{ background: "none", border: "none", color: "var(--primary)", fontWeight: 700, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}
                   >Usar este valor</button>
                 </InfoBox>
               )}
@@ -2063,8 +2063,8 @@ export default function App() {
                       const over = b.execution > 100;
                       const warn = b.execution >= 85;
                       const barColor = isExp
-                        ? (over ? "#dc2626" : warn ? "#f59e0b" : "#16a34a")
-                        : (over ? "#16a34a" : "#2563eb");
+                        ? (over ? "#f87171" : warn ? "#fbbf24" : "#34d399")
+                        : (over ? "#34d399" : "#5b9dff");
                       const badgeColor = isExp
                         ? (over ? "red" : warn ? "amber" : "green")
                         : (over ? "green" : "blue");
@@ -2118,7 +2118,7 @@ export default function App() {
               {!goalProgress.length && <EmptyState msg="No hay metas cargadas." />}
               {goalProgress.map((g) => {
                 const pct = Math.min(100, g.pct);
-                const barColor = pct >= 100 ? "#16a34a" : pct >= 60 ? "#2563eb" : "#f59e0b";
+                const barColor = pct >= 100 ? "#34d399" : pct >= 60 ? "#5b9dff" : "#fbbf24";
                 return (
                   <div key={g.id} className="budget-inline-row">
                     <div className="budget-inline-left">
@@ -2184,24 +2184,24 @@ export default function App() {
                         const execution = b.planned > 0 ? (b.actual / b.planned) * 100 : 0;
                         const over = execution > 100;
                         const warn = execution >= 85;
-                        const barColor = isExp ? (over ? "#dc2626" : warn ? "#f59e0b" : "#16a34a") : (over ? "#16a34a" : "#2563eb");
+                        const barColor = isExp ? (over ? "#f87171" : warn ? "#fbbf24" : "#34d399") : (over ? "#34d399" : "#5b9dff");
                         const badgeColor = isExp ? (over ? "red" : warn ? "amber" : "green") : (over ? "green" : "blue");
                         const maxVal = Math.max(b.planned, b.actual, 1);
                         const plannedPct = (b.planned / maxVal) * 100;
                         const actualPct  = Math.min((b.actual / maxVal) * 100, 100);
                         const diff = isExp ? b.planned - b.actual : b.actual - b.planned;
-                        const diffColor = diff >= 0 ? "#16a34a" : "#dc2626";
+                        const diffColor = diff >= 0 ? "#34d399" : "#f87171";
                         return (
                           <div key={b.category} className="budget-inline-row">
                             <div className="budget-inline-left">
                               <span className="budget-inline-cat">{b.category}</span>
                             </div>
                             <div className="budget-inline-bar-wrap">
-                              <div style={{ position: "relative", height: 8, borderRadius: 999, background: "#e2e8f0" }}>
-                                <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${plannedPct}%`, background: "#cbd5e1", borderRadius: 999 }} />
+                              <div style={{ position: "relative", height: 8, borderRadius: 999, background: "var(--border)" }}>
+                                <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${plannedPct}%`, background: "var(--muted)", borderRadius: 999 }} />
                                 <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${actualPct}%`, background: barColor, borderRadius: 999, opacity: 0.9 }} />
                                 {b.actual > b.planned && (
-                                  <div style={{ position: "absolute", left: `${plannedPct}%`, top: -2, height: 12, width: `${Math.min(((b.actual - b.planned) / maxVal) * 100, 100 - plannedPct)}%`, background: "#dc2626", borderRadius: "0 999px 999px 0", opacity: 0.75 }} />
+                                  <div style={{ position: "absolute", left: `${plannedPct}%`, top: -2, height: 12, width: `${Math.min(((b.actual - b.planned) / maxVal) * 100, 100 - plannedPct)}%`, background: "#f87171", borderRadius: "0 999px 999px 0", opacity: 0.75 }} />
                                 )}
                               </div>
                               <div className="budget-inline-nums" style={{ marginTop: 4 }}>
@@ -2223,11 +2223,11 @@ export default function App() {
             <div className="two-col">
               <Card>
                 <CardHead title="Ingresos vs egresos" icon="📈" />
-                <BarChart data={annualByMonth} xKey="month" bars={[{ key: "income", label: "Ingresos", color: "#16a34a" }, { key: "expenses", label: "Egresos", color: "#dc2626" }]} formatter={(v, short) => short ? (displayCurrency === "USD" ? `${v.toFixed(0)}` : `${Math.round(v/1000)}K`) : fmt(v)} />
+                <BarChart data={annualByMonth} xKey="month" bars={[{ key: "income", label: "Ingresos", color: "#34d399" }, { key: "expenses", label: "Egresos", color: "#f87171" }]} formatter={(v, short) => short ? (displayCurrency === "USD" ? `${v.toFixed(0)}` : `${Math.round(v/1000)}K`) : fmt(v)} />
               </Card>
               <Card>
                 <CardHead title="Fijos vs variables" icon="🧩" />
-                <BarChart data={annualByMonth} xKey="month" bars={[{ key: "fixed", label: "Fijos", color: "#dc2626" }, { key: "variable", label: "Variables", color: "#f59e0b" }]} formatter={(v, short) => short ? (displayCurrency === "USD" ? `${v.toFixed(0)}` : `${Math.round(v/1000)}K`) : fmt(v)} />
+                <BarChart data={annualByMonth} xKey="month" bars={[{ key: "fixed", label: "Fijos", color: "#f87171" }, { key: "variable", label: "Variables", color: "#fbbf24" }]} formatter={(v, short) => short ? (displayCurrency === "USD" ? `${v.toFixed(0)}` : `${Math.round(v/1000)}K`) : fmt(v)} />
               </Card>
             </div>
 
@@ -2252,9 +2252,9 @@ export default function App() {
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
                       <thead>
                         <tr>
-                          <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "2px solid #e2e8f0", background: "#f8fafc", minWidth: 160 }}>Categoría</th>
+                          <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "2px solid var(--border)", background: "var(--surface-2)", minWidth: 160 }}>Categoría</th>
                           {visibleMonths.map((mo) => (
-                            <th key={mo} style={{ textAlign: "right", padding: "8px 10px", borderBottom: "2px solid #e2e8f0", background: "#f8fafc", whiteSpace: "nowrap" }}>
+                            <th key={mo} style={{ textAlign: "right", padding: "8px 10px", borderBottom: "2px solid var(--border)", background: "var(--surface-2)", whiteSpace: "nowrap" }}>
                               {mo.slice(5)} {/* solo mm */}
                             </th>
                           ))}
@@ -2271,48 +2271,48 @@ export default function App() {
                               {/* Fila de categoría */}
                               <tr
                                 onClick={() => setExpandedCats((p) => ({ ...p, [cat]: !p[cat] }))}
-                                style={{ cursor: subRows.length > 0 ? "pointer" : "default", background: isExpanded ? "#f8fafc" : "white" }}
+                                style={{ cursor: subRows.length > 0 ? "pointer" : "default", background: isExpanded ? "var(--surface-2)" : "transparent" }}
                               >
-                                <td style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", fontWeight: 700 }}>
-                                  {subRows.length > 0 && <span style={{ marginRight: 6, fontSize: "0.75rem", color: "#94a3b8" }}>{isExpanded ? "▼" : "▶"}</span>}
+                                <td style={{ padding: "9px 10px", borderBottom: "1px solid var(--border)", fontWeight: 700 }}>
+                                  {subRows.length > 0 && <span style={{ marginRight: 6, fontSize: "0.75rem", color: "var(--muted)" }}>{isExpanded ? "▼" : "▶"}</span>}
                                   {cat}
                                 </td>
                                 {visibleMonths.map((mo, mi) => {
                                   const val = byMonth[mo] || 0;
                                   const prev = mi > 0 ? (byMonth[visibleMonths[mi - 1]] || 0) : null;
                                   const trend = prev !== null && prev > 0 ? (val - prev) / prev : null;
-                                  const trendColor = trend === null ? "#64748b" : trend > 0.05 ? "#dc2626" : trend < -0.05 ? "#16a34a" : "#64748b";
+                                  const trendColor = trend === null ? "var(--muted)" : trend > 0.05 ? "#f87171" : trend < -0.05 ? "#34d399" : "var(--muted)";
                                   return (
-                                    <td key={mo} style={{ textAlign: "right", padding: "9px 10px", borderBottom: "1px solid #e2e8f0", fontWeight: 700, color: val > 0 ? "#0f172a" : "#cbd5e1" }}>
+                                    <td key={mo} style={{ textAlign: "right", padding: "9px 10px", borderBottom: "1px solid var(--border)", fontWeight: 700, color: val > 0 ? "var(--text)" : "var(--border)" }}>
                                       {val > 0 ? (
                                         <span>
                                           {fmt(val)}
                                           {trend !== null && <span style={{ fontSize: "0.7rem", color: trendColor, marginLeft: 4 }}>{trend > 0 ? "▲" : trend < 0 ? "▼" : "─"}{Math.abs(trend * 100).toFixed(0)}%</span>}
                                         </span>
-                                      ) : <span style={{ color: "#e2e8f0" }}>—</span>}
+                                      ) : <span style={{ color: "var(--border)"}}>—</span>}
                                     </td>
                                   );
                                 })}
                               </tr>
                               {/* Filas de subcategoría (descripción) */}
                               {isExpanded && subRows.map((sub) => (
-                                <tr key={sub.desc} style={{ background: "#fafbfc" }}>
-                                  <td style={{ padding: "7px 10px 7px 28px", borderBottom: "1px solid #f1f5f9", color: "#475569", fontSize: "0.82rem" }}>
+                                <tr key={sub.desc} style={{ background: "var(--surface-2)" }}>
+                                  <td style={{ padding: "7px 10px 7px 28px", borderBottom: "1px solid var(--border)", color: "var(--muted)", fontSize: "0.82rem" }}>
                                     └ {sub.desc}
                                   </td>
                                   {visibleMonths.map((mo, mi) => {
                                     const val = sub.byMonth[mo] || 0;
                                     const prev = mi > 0 ? (sub.byMonth[visibleMonths[mi - 1]] || 0) : null;
                                     const trend = prev !== null && prev > 0 ? (val - prev) / prev : null;
-                                    const trendColor = trend === null ? "#64748b" : trend > 0.05 ? "#dc2626" : trend < -0.05 ? "#16a34a" : "#64748b";
+                                    const trendColor = trend === null ? "var(--muted)" : trend > 0.05 ? "#f87171" : trend < -0.05 ? "#34d399" : "var(--muted)";
                                     return (
-                                      <td key={mo} style={{ textAlign: "right", padding: "7px 10px", borderBottom: "1px solid #f1f5f9", fontSize: "0.82rem", color: val > 0 ? "#475569" : "#e2e8f0" }}>
+                                      <td key={mo} style={{ textAlign: "right", padding: "7px 10px", borderBottom: "1px solid var(--border)", fontSize: "0.82rem", color: val > 0 ? "var(--muted)" : "var(--border)" }}>
                                         {val > 0 ? (
                                           <span>
                                             {fmt(val)}
                                             {trend !== null && <span style={{ fontSize: "0.68rem", color: trendColor, marginLeft: 4 }}>{trend > 0 ? "▲" : "▼"}{Math.abs(trend * 100).toFixed(0)}%</span>}
                                           </span>
-                                        ) : <span style={{ color: "#e2e8f0" }}>—</span>}
+                                        ) : <span style={{ color: "var(--border)"}}>—</span>}
                                       </td>
                                     );
                                   })}
@@ -2432,7 +2432,7 @@ export default function App() {
                       Cancelado: {pct.toFixed(1)}% · {schedule.canCancel ? `Plazo estimado: ${schedule.estimatedTerm} cuota${schedule.estimatedTerm === 1 ? "" : "s"}` : "⚠️ La cuota objetivo no alcanza a cubrir el interés — nunca se cancela"}
                     </div>
                     <div style={{ marginTop: 8 }}>
-                      <button className="del-btn" style={{ borderColor: "#bfdbfe", color: "#1e40af" }} onClick={() => setExpandedLoans((p) => ({ ...p, [loan.id]: !p[loan.id] }))}>
+                      <button className="del-btn" style={{ borderColor: "var(--primary)", color: "var(--primary)" }} onClick={() => setExpandedLoans((p) => ({ ...p, [loan.id]: !p[loan.id] }))}>
                         {isExpanded ? "▲ ocultar cronograma" : "▼ ver cronograma planificado"}
                       </button>
                     </div>
