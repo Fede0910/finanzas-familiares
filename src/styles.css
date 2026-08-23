@@ -90,12 +90,12 @@ body {
 /* ── Form grids ── */
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
 }
 .form-grid.three-col { grid-template-columns: repeat(3, 1fr); }
 .form-grid.two-col-form { grid-template-columns: repeat(2, 1fr); }
-.filter-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+.filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
 
 /* ── Buttons ── */
 .btn {

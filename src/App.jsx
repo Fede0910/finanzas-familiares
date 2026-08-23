@@ -295,90 +295,6 @@ function PieChart({ data, nameKey, valueKey, formatter }) {
   );
 }
 
-function HorizontalBarChart({ data, formatter }) {
-  // data: [{ label, real, budget, isIncome }]  grouped by type via sections
-  // isIncome=true → positive deviation is good; false → negative deviation is good
-  if (!data.length) return <EmptyState msg="Sin presupuestos para mostrar" />;
-
-  const maxVal = Math.max(...data.map((d) => Math.max(d.real, d.budget || 0)), 1);
-  const rowH = 34, PL = 130, PR = 100, PT = 4, barH = 16;
-  const W = 580;
-  const H = PT + data.length * rowH + 24;
-  const trackW = W - PL - PR;
-
-  return (
-    <div className="chart-wrap">
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto" }}>
-        {data.map((d, i) => {
-          if (d.isHeader) {
-            return (
-              <g key={i}>
-                <text x={0} y={PT + i * rowH + barH - 2} fontSize="10" fontWeight="700" fill="#64748b" textTransform="uppercase">{d.label}</text>
-              </g>
-            );
-          }
-          const y = PT + i * rowH;
-          const budgetW = d.budget > 0 ? (d.budget / maxVal) * trackW : 0;
-          const realW = Math.min((d.real / maxVal) * trackW, trackW);
-          const over = d.budget > 0 && d.real > d.budget;
-          const under = d.budget > 0 && !over && d.isIncome && d.real < d.budget;
-          const warn = d.budget > 0 && !over && !d.isIncome && (d.real / d.budget) >= 0.85;
-          const barColor = over
-            ? (d.isIncome ? "#16a34a" : "#dc2626")   // income over = good green; expense over = bad red
-            : under ? "#dc2626"                        // income under = bad red
-            : warn ? "#f59e0b"
-            : "#16a34a";
-
-          // % label: for expenses, negative if over. For income, negative if under.
-          const pct = d.budget > 0 ? (d.real / d.budget) * 100 : null;
-          let pctLabel = "";
-          if (pct !== null) {
-            if (d.isIncome) {
-              pctLabel = pct >= 100 ? `+${Math.round(pct - 100)}%` : `-${Math.round(100 - pct)}%`;
-            } else {
-              pctLabel = over ? `-${Math.round(pct - 100)}%` : `${Math.round(pct)}%`;
-            }
-          }
-          const pctColor = d.isIncome ? (over ? "#16a34a" : "#dc2626") : (over ? "#dc2626" : "#16a34a");
-
-          return (
-            <g key={i}>
-              {/* label */}
-              <text x={PL - 6} y={y + barH / 2 + 4} textAnchor="end" fontSize="10" fill="#334155">{d.label}</text>
-              {/* budget track */}
-              {budgetW > 0 && <rect x={PL} y={y} width={budgetW} height={barH} fill="#e2e8f0" rx="3" />}
-              {/* budget label — at right edge of grey track */}
-              {d.budget > 0 && (
-                <text x={PL + budgetW} y={y + barH + 10} textAnchor="end" fontSize="8" fill="#94a3b8">
-                  {formatter ? formatter(d.budget) : d.budget}
-                </text>
-              )}
-              {/* real fill */}
-              {d.real > 0 && <rect x={PL} y={y} width={Math.max(realW, 3)} height={barH} fill={barColor} rx="3" opacity="0.9" />}
-              {/* real amount — fixed right */}
-              <text x={W - PR + 4} y={y + barH / 2 + 4} fontSize="10" fontWeight="700" fill={barColor}>
-                {formatter ? formatter(d.real) : d.real}
-              </text>
-              {/* pct */}
-              {pct !== null && (
-                <text x={W - 2} y={y + barH / 2 + 4} fontSize="9" fill={pctColor} textAnchor="end" fontWeight="700">
-                  {pctLabel}
-                </text>
-              )}
-            </g>
-          );
-        })}
-        <g transform={`translate(${PL}, ${H - 14})`}>
-          <rect width="8" height="8" fill="#e2e8f0" rx="2" /><text x="12" y="8" fontSize="9" fill="#64748b">Presp.</text>
-          <rect x="65" width="8" height="8" fill="#16a34a" rx="2" /><text x="77" y="8" fontSize="9" fill="#64748b">Ok</text>
-          <rect x="105" width="8" height="8" fill="#f59e0b" rx="2" /><text x="117" y="8" fontSize="9" fill="#64748b">Cerca</text>
-          <rect x="160" width="8" height="8" fill="#dc2626" rx="2" /><text x="172" y="8" fontSize="9" fill="#64748b">Excedido / No alcanzado</text>
-        </g>
-      </svg>
-    </div>
-  );
-}
-
 function DescriptionAutocomplete({ value, onChange, suggestions }) {
   const [open, setOpen] = useState(false);
   const [inputVal, setInputVal] = useState(value || "");
@@ -1499,14 +1415,12 @@ export default function App() {
   }
 
   const selectedDebtForMov = personDebts.find((d) => String(d.id) === String(movForm.linkedDebtId));
-  const availableGoalsForMov = personGoals.filter((g) => g.active !== false && g.goal_type === movForm.type);
   const descriptionSuggestions = useMemo(() => {
     if (!movForm.category) return [];
     const seen = new Set();
     movements.forEach((m) => { if (m.category === movForm.category && m.description?.trim()) seen.add(m.description.trim()); });
     return Array.from(seen).sort();
   }, [movements, movForm.category]);
-  const selectedGoalForMov = personGoals.find((g) => String(g.id) === String(movForm.linkedGoalId));
   const selectedDebtForPay = personDebts.find((d) => String(d.id) === String(debtPayForm.debtId));
 
   if (loading) return <div className="loading-screen"><Spinner /><p>Cargando datos…</p></div>;
