@@ -6,7 +6,7 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
-const DEFAULT_PEOPLE = ["Federico", "Mica", "Santy", "Compartido"];
+const DEFAULT_PEOPLE = ["Federico", "Mica", "Santy"];
 const PAYMENT_METHODS = ["Banco", "Tarjeta", "Efectivo", "Mercado Pago", "Transferencia"];
 const DEFAULT_TYPES = ["Ingreso", "Egreso", "Ahorro", "Inversión"];
 const DEFAULT_CATEGORY_ROWS = [
@@ -382,29 +382,29 @@ export default function App() {
   const [expandedCats, setExpandedCats] = useState({});
 
   const emptyMovForm = useCallback(() => ({
-    date: today(), person: "Compartido", type: "", category: "", subcategoryId: "", description: "", originalAmount: "", currency: "ARS",
+    date: today(), person: "Federico", type: "", category: "", subcategoryId: "", description: "", originalAmount: "", currency: "ARS",
     fxRate: blueRate, linkedDebtId: "", linkedGoalId: "", paymentMethod: "", cardId: "", installments: "1",
     shared: false, sharedPeople: [],
   }), [blueRate]);
 
   const [movForm, setMovForm] = useState(emptyMovForm());
-  const [transferForm, setTransferForm] = useState({ date: today(), person: "Compartido", fromType: "Ahorro", fromCategory: "", toType: "Inversión", toCategory: "", originalAmount: "", currency: "ARS", description: "" });
-  const [debtForm, setDebtForm] = useState({ name: "", owner: "Compartido", balance: "", installment: "", dueDay: "", priority: "Media", rate: "", notes: "" });
-  const [goalForm, setGoalForm] = useState({ name: categoryMap["Ahorro"]?.[0] || "", owner: "Compartido", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
-  const [budgetForm, setBudgetForm] = useState({ month: currentMonth(), person: "Compartido", type: "Egreso", category: "Supermercado", planned: "" });
-  const [debtPayForm, setDebtPayForm] = useState({ debtId: "", date: today(), amount: "", person: "Compartido", notes: "" });
+  const [transferForm, setTransferForm] = useState({ date: today(), person: "Federico", fromType: "Ahorro", fromCategory: "", toType: "Inversión", toCategory: "", originalAmount: "", currency: "ARS", description: "" });
+  const [debtForm, setDebtForm] = useState({ name: "", owner: "Federico", balance: "", installment: "", dueDay: "", priority: "Media", rate: "", notes: "" });
+  const [goalForm, setGoalForm] = useState({ name: categoryMap["Ahorro"]?.[0] || "", owner: "Federico", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
+  const [budgetForm, setBudgetForm] = useState({ month: currentMonth(), person: "Federico", type: "Egreso", category: "Supermercado", planned: "" });
+  const [debtPayForm, setDebtPayForm] = useState({ debtId: "", date: today(), amount: "", person: "Federico", notes: "" });
   const [loanForm, setLoanForm] = useState({
-    name: "", owner: "Compartido", principal: "", annualRate: "", startDate: today(),
+    name: "", owner: "Federico", principal: "", annualRate: "", startDate: today(),
     dayOfMonth: "10", graceMonths: "0", termMonths: "", targetInstallment: "", notes: "",
   });
-  const [loanPayForm, setLoanPayForm] = useState({ loanId: "", date: today(), amount: "", person: "Compartido", notes: "" });
+  const [loanPayForm, setLoanPayForm] = useState({ loanId: "", date: today(), amount: "", person: "Federico", notes: "" });
   const [expandedLoans, setExpandedLoans] = useState({});
   const [balanceForm, setBalanceForm] = useState({ month: currentMonth(), opening: "", notes: "" });
   const [catalogForm, setCatalogForm] = useState({ person: "", type: "", categoryType: "Egreso", category: "", categoryFv: "V" });
   const [subcatForm, setSubcatForm] = useState({ categoryType: "Egreso", categoryId: "", name: "" });
-  const [cardForm, setCardForm] = useState({ name: "", owner: "Compartido" });
+  const [cardForm, setCardForm] = useState({ name: "", owner: "Federico" });
   const [debitoForm, setDebitoForm] = useState({
-    person: "Compartido", type: "Egreso", category: "", subcategoryId: "", description: "",
+    person: "Federico", type: "Egreso", category: "", subcategoryId: "", description: "",
     currency: "ARS", amount: "", dayOfMonth: "10", startDate: today(),
   });
   const [seriesEndDateInputs, setSeriesEndDateInputs] = useState({}); // seriesId -> fecha elegida para truncar
@@ -575,7 +575,7 @@ export default function App() {
       const autoGoal = goals.find((g) =>
         g.active !== false &&
         g.goal_type === movForm.type &&
-        (selectedPerson === "all" || g.owner === movForm.person || g.owner === "Compartido") &&
+        (selectedPerson === "all" || g.owner === movForm.person) &&
         g.name.toLowerCase() === movForm.category.toLowerCase()
       );
       if (autoGoal) linkedGoalId = autoGoal.id;
@@ -776,7 +776,7 @@ export default function App() {
     const [y, m] = reconcileForm.month.split("-").map(Number);
     const date = `${reconcileForm.month}-${String(daysInMonth(y, m)).padStart(2, "0")}`;
     const row = {
-      movement_date: date, person: "Compartido", type: "Egreso", category: "Impuestos Tarjetas",
+      movement_date: date, person: "Federico", type: "Egreso", category: "Impuestos Tarjetas",
       subcategory_id: null, description: `Diferencia resumen · ${cardNameById[cardId] || "tarjeta"} · ${reconcileForm.month}`,
       original_currency: "ARS", original_amount: reconcileDiff, fx_rate: 1, amount_ars: reconcileDiff,
       amount_usd: reconcileDiff / Math.max(blueRate, 1), payment_method: "Tarjeta",
@@ -807,7 +807,7 @@ export default function App() {
     const toMov = (d) => d ? { id: d.id, date: d.movement_date, person: d.person, type: d.type, category: d.category, description: d.description, originalAmount: d.original_amount, currency: d.original_currency, fxRate: d.fx_rate, amountArs: d.amount_ars, amountUsd: d.amount_usd, paymentMethod: d.payment_method, linkedDebtId: d.linked_debt_id, linkedGoalId: d.linked_goal_id } : null;
     const newMovs = [toMov(d1), toMov(d2)].filter(Boolean);
     if (newMovs.length) setMovements((prev) => [...newMovs, ...prev]);
-    setTransferForm({ date: today(), person: "Compartido", fromType: "Ahorro", fromCategory: "", toType: "Inversión", toCategory: "", originalAmount: "", currency: "ARS", description: "" });
+    setTransferForm({ date: today(), person: "Federico", fromType: "Ahorro", fromCategory: "", toType: "Inversión", toCategory: "", originalAmount: "", currency: "ARS", description: "" });
     setSaving(false);
   }
 
@@ -845,7 +845,7 @@ export default function App() {
         notes: data.notes, totalPaid: data.total_paid, status: data.status,
       }, ...prev]);
     }
-    setDebtForm({ name: "", owner: "Compartido", balance: "", installment: "", dueDay: "", priority: "Media", rate: "", notes: "" });
+    setDebtForm({ name: "", owner: "Federico", balance: "", installment: "", dueDay: "", priority: "Media", rate: "", notes: "" });
     setSaving(false);
   }
   async function deleteDebt(id) {
@@ -878,7 +878,7 @@ export default function App() {
       originalAmount: mov.original_amount, currency: mov.original_currency, fxRate: mov.fx_rate, amountArs: mov.amount_ars,
       amountUsd: mov.amount_usd, paymentMethod: null, linkedDebtId: mov.linked_debt_id, linkedGoalId: mov.linked_goal_id,
     }, ...prev]);
-    setDebtPayForm({ debtId: "", date: today(), amount: "", person: "Compartido", notes: "" });
+    setDebtPayForm({ debtId: "", date: today(), amount: "", person: "Federico", notes: "" });
     setSaving(false);
   }
 
@@ -914,7 +914,7 @@ export default function App() {
       termMonths: data.term_months, targetInstallment: data.target_installment, notes: data.notes,
       status: data.status, linkedMovementId: mov?.id || null,
     }, ...prev]);
-    setLoanForm({ name: "", owner: "Compartido", principal: "", annualRate: "", startDate: today(), dayOfMonth: "10", graceMonths: "0", termMonths: "", targetInstallment: "", notes: "" });
+    setLoanForm({ name: "", owner: "Federico", principal: "", annualRate: "", startDate: today(), dayOfMonth: "10", graceMonths: "0", termMonths: "", targetInstallment: "", notes: "" });
     setSaving(false);
   }
 
@@ -940,7 +940,7 @@ export default function App() {
     }]).select().single();
     if (mov) setMovements((prev) => [mapMovementRow(mov), ...prev]);
     if (lp) setLoanPayments((prev) => [{ id: lp.id, loanId: lp.loan_id, date: lp.payment_date, amount: lp.amount, person: lp.person, notes: lp.notes, linkedMovementId: lp.linked_movement_id }, ...prev]);
-    setLoanPayForm({ loanId: "", date: today(), amount: "", person: "Compartido", notes: "" });
+    setLoanPayForm({ loanId: "", date: today(), amount: "", person: "Federico", notes: "" });
     setSaving(false);
   }
 
@@ -952,7 +952,7 @@ export default function App() {
     }]).select().single();
     if (error) { console.error(error); return; }
     if (data) setGoals((prev) => [data, ...prev]);
-    setGoalForm({ name: (categoryMap["Ahorro"] || [])[0] || "", owner: "Compartido", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
+    setGoalForm({ name: (categoryMap["Ahorro"] || [])[0] || "", owner: "Federico", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
   }
   async function deleteGoal(id) {
     await supabase.from("goals").delete().eq("id", id);
@@ -1184,19 +1184,20 @@ export default function App() {
   const monthBalance = useMemo(() => computeMonthBalance(reportMonth), [computeMonthBalance, reportMonth]);
 
   // Sugerencia de presupuesto = promedio del gasto real de los 3 meses previos (persona+tipo+categoría)
+  // Promedio de los últimos meses con datos reales para esta persona+tipo+categoría — si sólo hay
+  // 1 mes de historial (ej. recién arrancado) usa ese, con 2 promedia esos 2, y a partir de 3 siempre
+  // toma los 3 más recientes (no un promedio histórico acumulado).
   const budgetAvgSuggestion = useMemo(() => {
     const [y, m] = budgetForm.month.split("-").map(Number);
-    const months = [1, 2, 3].map((n) => {
+    const found = [];
+    for (let n = 1; n <= 12 && found.length < 3; n++) {
       const d = new Date(y, m - 1 - n, 1);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    });
-    const totals = months.map((mo) =>
-      personMovements
-        .filter((mv) => monthKey(mv.date) === mo && mv.person === budgetForm.person && mv.type === budgetForm.type && mv.category === budgetForm.category)
-        .reduce((a, mv) => a + mv.amountArs, 0)
-    );
-    if (!totals.some((t) => t > 0)) return null;
-    return Math.round(totals.reduce((a, b) => a + b, 0) / 3);
+      const mo = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const monthMovs = personMovements.filter((mv) => monthKey(mv.date) === mo && mv.person === budgetForm.person && mv.type === budgetForm.type && mv.category === budgetForm.category);
+      if (monthMovs.length) found.push(monthMovs.reduce((a, mv) => a + mv.amountArs, 0));
+    }
+    if (!found.length) return null;
+    return { value: Math.round(found.reduce((a, b) => a + b, 0) / found.length), months: found.length };
   }, [personMovements, budgetForm.month, budgetForm.person, budgetForm.type, budgetForm.category]);
 
   const monthlyExpenseByFV = useMemo(() => {
@@ -1481,14 +1482,14 @@ export default function App() {
                 </Field>
                 <Field label="¿Es compartido?">
                   <label style={{ display: "flex", alignItems: "center", gap: 6, height: "100%" }}>
-                    <input type="checkbox" checked={movForm.shared} onChange={(e) => setMovForm({ ...movForm, shared: e.target.checked, sharedPeople: [] })} />
+                    <input type="checkbox" checked={movForm.shared} onChange={(e) => setMovForm({ ...movForm, shared: e.target.checked, sharedPeople: e.target.checked ? [...people] : [] })} />
                     <span className="muted small">Repartir entre varias personas</span>
                   </label>
                 </Field>
                 {movForm.shared && (
                   <Field label="Repartir entre">
                     <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", height: "100%" }}>
-                      {people.filter((p) => p !== "Compartido").map((p) => (
+                      {people.map((p) => (
                         <label key={p} style={{ display: "flex", alignItems: "center", gap: 4 }}>
                           <input
                             type="checkbox"
@@ -1999,9 +2000,9 @@ export default function App() {
               </div>
               {budgetAvgSuggestion !== null && (
                 <InfoBox color="blue">
-                  Promedio real de los últimos 3 meses para <strong>{budgetForm.category}</strong> · {budgetForm.person}: <strong>{fmtArs(budgetAvgSuggestion)}</strong> ·{" "}
+                  Promedio real de {budgetAvgSuggestion.months === 1 ? "el último mes" : `los últimos ${budgetAvgSuggestion.months} meses`} para <strong>{budgetForm.category}</strong> · {budgetForm.person}: <strong>{fmtArs(budgetAvgSuggestion.value)}</strong> ·{" "}
                   <button
-                    onClick={() => setBudgetForm((f) => ({ ...f, planned: String(budgetAvgSuggestion) }))}
+                    onClick={() => setBudgetForm((f) => ({ ...f, planned: String(budgetAvgSuggestion.value) }))}
                     style={{ background: "none", border: "none", color: "#1e40af", fontWeight: 700, cursor: "pointer", textDecoration: "underline", fontSize: "inherit" }}
                   >Usar este valor</button>
                 </InfoBox>
