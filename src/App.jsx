@@ -379,8 +379,7 @@ const TABS = [
   { id: "datos", label: "🗂 Datos" },
   { id: "presupuesto", label: "🎯 Presupuesto" },
   { id: "reportes", label: "📈 Reportes" },
-  { id: "deudas", label: "💳 Deudas" },
-  { id: "prestamos", label: "🏦 Préstamos" },
+  { id: "deudas", label: "💳 Deudas y Préstamos" },
   { id: "config", label: "⚙️ Config" },
 ];
 
@@ -443,6 +442,7 @@ export default function App() {
   const [loanPayForm, setLoanPayForm] = useState({ loanId: "", date: today(), selectedPeriods: [], amount: "", person: "Federico", notes: "" });
   const [loanIncreaseForm, setLoanIncreaseForm] = useState({}); // { [loanId]: { amount, newInstallment } }
   const [expandedLoans, setExpandedLoans] = useState({});
+  const [debtsSubTab, setDebtsSubTab] = useState("deudas"); // "deudas" | "prestamos" — sub-vista dentro de la tab fusionada
   const [balanceForm, setBalanceForm] = useState({ month: currentMonth(), opening: "", notes: "" });
   const [catalogForm, setCatalogForm] = useState({ person: "", type: "", categoryType: "Egreso", category: "", categoryFv: "V" });
   const [subcatForm, setSubcatForm] = useState({ categoryType: "Egreso", categoryId: "", name: "" });
@@ -2450,54 +2450,61 @@ export default function App() {
 
         {tab === "deudas" && (
           <div className="tab-content">
-            <div style={{ display: "flex", justifyContent: "flex-end" }}><Btn small variant="outline" onClick={() => exportSection("deudas")}>⬇ Exportar deudas CSV</Btn></div>
-            <div className="two-col">
-              <Card>
-                <CardHead title="Agregar deuda" icon="💳" />
-                <div className="form-grid two-col-form">
-                  <Field label="Nombre"><Input value={debtForm.name} onChange={(e) => setDebtForm({ ...debtForm, name: e.target.value })} /></Field>
-                  <Field label="Responsable"><Select value={debtForm.owner} onChange={(v) => setDebtForm({ ...debtForm, owner: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
-                  <Field label="Saldo actual"><Input type="number" value={debtForm.balance} onChange={(e) => setDebtForm({ ...debtForm, balance: e.target.value })} /></Field>
-                  <Field label="Cuota estimada"><Input type="number" value={debtForm.installment} onChange={(e) => setDebtForm({ ...debtForm, installment: e.target.value })} /></Field>
-                  <Field label="Día de vencimiento"><Input type="number" value={debtForm.dueDay} onChange={(e) => setDebtForm({ ...debtForm, dueDay: e.target.value })} /></Field>
-                  <Field label="Prioridad"><Select value={debtForm.priority} onChange={(v) => setDebtForm({ ...debtForm, priority: v })}><option value="Alta">Alta</option><option value="Media">Media</option><option value="Baja">Baja</option></Select></Field>
-                  <Field label="Tasa"><Input type="number" value={debtForm.rate} onChange={(e) => setDebtForm({ ...debtForm, rate: e.target.value })} /></Field>
-                  <Field label="Notas"><Input value={debtForm.notes} onChange={(e) => setDebtForm({ ...debtForm, notes: e.target.value })} /></Field>
-                </div>
-                <div style={{ marginTop: 12 }}><Btn onClick={addDebt}>＋ Agregar deuda</Btn></div>
-              </Card>
-              <Card>
-                <CardHead title="Registrar pago de deuda" icon="💸" />
-                <div className="form-grid two-col-form">
-                  <Field label="Deuda"><Select value={debtPayForm.debtId} onChange={(v) => setDebtPayForm({ ...debtPayForm, debtId: v })}><option value="">Elegir deuda…</option>{personDebts.map((d) => <option key={d.id} value={String(d.id)}>{d.name}</option>)}</Select></Field>
-                  <Field label="Fecha"><Input type="date" value={debtPayForm.date} onChange={(e) => setDebtPayForm({ ...debtPayForm, date: e.target.value })} /></Field>
-                  <Field label="Importe"><Input type="number" value={debtPayForm.amount} onChange={(e) => setDebtPayForm({ ...debtPayForm, amount: e.target.value })} /></Field>
-                  <Field label="Persona"><Select value={debtPayForm.person} onChange={(v) => setDebtPayForm({ ...debtPayForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
-                  <Field label="Notas"><Input value={debtPayForm.notes} onChange={(e) => setDebtPayForm({ ...debtPayForm, notes: e.target.value })} /></Field>
-                </div>
-                {selectedDebtForPay && <InfoBox color="blue">Saldo actual: <strong>{fmtArs(selectedDebtForPay.balance)}</strong> · Cuota estimada: <strong>{fmtArs(selectedDebtForPay.installment)}</strong></InfoBox>}
-                <div style={{ marginTop: 12 }}><Btn onClick={registerDebtPayment}>Registrar pago</Btn></div>
-              </Card>
+            <div className="tabs-list" style={{ marginBottom: -4 }}>
+              <button className={`tab-btn${debtsSubTab === "deudas" ? " active" : ""}`} onClick={() => setDebtsSubTab("deudas")}>💳 Deudas <span className="muted small">(lo que debemos)</span></button>
+              <button className={`tab-btn${debtsSubTab === "prestamos" ? " active" : ""}`} onClick={() => setDebtsSubTab("prestamos")}>🏦 Préstamos <span className="muted small">(lo que nos deben)</span></button>
             </div>
-            <div className="debt-cards">
-              {personDebts.length === 0 && <EmptyState msg="No hay deudas cargadas." />}
-              {personDebts.map((d) => {
-                const pct = d.initialBalance > 0 ? ((d.totalPaid || 0) / d.initialBalance) * 100 : 0;
-                return (
-                  <Card key={d.id}>
-                    <div className="debt-card-head"><div><div className="fw">{d.name}</div><div className="muted small">{d.owner} · Día {d.dueDay} · Prioridad {d.priority}</div></div><button className="del-btn" onClick={() => deleteDebt(d.id)}>🗑</button></div>
-                    <div className="debt-amounts"><div><span className="muted small">Saldo</span><div className="fw red">{fmtArs(d.balance)}</div></div><div><span className="muted small">Cuota</span><div>{fmtArs(d.installment)}</div></div><div><span className="muted small">Pagado</span><div className="green">{fmtArs(d.totalPaid || 0)}</div></div><div><span className="muted small">Vence día</span><div>{d.dueDay || "—"}</div></div></div>
-                    <Progress value={pct} />
-                    <div className="muted small" style={{ marginTop: 4 }}>Cancelado: {pct.toFixed(1)}%</div>
-                  </Card>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
-        {tab === "prestamos" && (
-          <div className="tab-content">
+            {debtsSubTab === "deudas" && (
+              <>
+                <div style={{ display: "flex", justifyContent: "flex-end" }}><Btn small variant="outline" onClick={() => exportSection("deudas")}>⬇ Exportar deudas CSV</Btn></div>
+                <div className="two-col">
+                  <Card>
+                    <CardHead title="Agregar deuda" icon="💳" />
+                    <div className="form-grid two-col-form">
+                      <Field label="Nombre"><Input value={debtForm.name} onChange={(e) => setDebtForm({ ...debtForm, name: e.target.value })} /></Field>
+                      <Field label="Responsable"><Select value={debtForm.owner} onChange={(v) => setDebtForm({ ...debtForm, owner: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                      <Field label="Saldo actual"><Input type="number" value={debtForm.balance} onChange={(e) => setDebtForm({ ...debtForm, balance: e.target.value })} /></Field>
+                      <Field label="Cuota estimada"><Input type="number" value={debtForm.installment} onChange={(e) => setDebtForm({ ...debtForm, installment: e.target.value })} /></Field>
+                      <Field label="Día de vencimiento"><Input type="number" value={debtForm.dueDay} onChange={(e) => setDebtForm({ ...debtForm, dueDay: e.target.value })} /></Field>
+                      <Field label="Prioridad"><Select value={debtForm.priority} onChange={(v) => setDebtForm({ ...debtForm, priority: v })}><option value="Alta">Alta</option><option value="Media">Media</option><option value="Baja">Baja</option></Select></Field>
+                      <Field label="Tasa"><Input type="number" value={debtForm.rate} onChange={(e) => setDebtForm({ ...debtForm, rate: e.target.value })} /></Field>
+                      <Field label="Notas"><Input value={debtForm.notes} onChange={(e) => setDebtForm({ ...debtForm, notes: e.target.value })} /></Field>
+                    </div>
+                    <div style={{ marginTop: 12 }}><Btn onClick={addDebt}>＋ Agregar deuda</Btn></div>
+                  </Card>
+                  <Card>
+                    <CardHead title="Registrar pago de deuda" icon="💸" />
+                    <div className="form-grid two-col-form">
+                      <Field label="Deuda"><Select value={debtPayForm.debtId} onChange={(v) => setDebtPayForm({ ...debtPayForm, debtId: v })}><option value="">Elegir deuda…</option>{personDebts.map((d) => <option key={d.id} value={String(d.id)}>{d.name}</option>)}</Select></Field>
+                      <Field label="Fecha"><Input type="date" value={debtPayForm.date} onChange={(e) => setDebtPayForm({ ...debtPayForm, date: e.target.value })} /></Field>
+                      <Field label="Importe"><Input type="number" value={debtPayForm.amount} onChange={(e) => setDebtPayForm({ ...debtPayForm, amount: e.target.value })} /></Field>
+                      <Field label="Persona"><Select value={debtPayForm.person} onChange={(v) => setDebtPayForm({ ...debtPayForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                      <Field label="Notas"><Input value={debtPayForm.notes} onChange={(e) => setDebtPayForm({ ...debtPayForm, notes: e.target.value })} /></Field>
+                    </div>
+                    {selectedDebtForPay && <InfoBox color="blue">Saldo actual: <strong>{fmtArs(selectedDebtForPay.balance)}</strong> · Cuota estimada: <strong>{fmtArs(selectedDebtForPay.installment)}</strong></InfoBox>}
+                    <div style={{ marginTop: 12 }}><Btn onClick={registerDebtPayment}>Registrar pago</Btn></div>
+                  </Card>
+                </div>
+                <div className="debt-cards">
+                  {personDebts.length === 0 && <EmptyState msg="No hay deudas cargadas." />}
+                  {personDebts.map((d) => {
+                    const pct = d.initialBalance > 0 ? ((d.totalPaid || 0) / d.initialBalance) * 100 : 0;
+                    return (
+                      <Card key={d.id}>
+                        <div className="debt-card-head"><div><div className="fw">{d.name}</div><div className="muted small">{d.owner} · Día {d.dueDay} · Prioridad {d.priority}</div></div><button className="del-btn" onClick={() => deleteDebt(d.id)}>🗑</button></div>
+                        <div className="debt-amounts"><div><span className="muted small">Saldo</span><div className="fw red">{fmtArs(d.balance)}</div></div><div><span className="muted small">Cuota</span><div>{fmtArs(d.installment)}</div></div><div><span className="muted small">Pagado</span><div className="green">{fmtArs(d.totalPaid || 0)}</div></div><div><span className="muted small">Vence día</span><div>{d.dueDay || "—"}</div></div></div>
+                        <Progress value={pct} />
+                        <div className="muted small" style={{ marginTop: 4 }}>Cancelado: {pct.toFixed(1)}%</div>
+                      </Card>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {debtsSubTab === "prestamos" && (
+              <>
             <Card>
               <CardHead title="Otorgar préstamo" icon="🏦" />
               <p className="muted small" style={{ marginBottom: 12 }}>Plata que la familia le presta a un tercero (al revés de Deudas). Al otorgarlo se descuenta el capital como Inversión · Prestamos. Completá <strong>Plazo</strong> o <strong>Cuota objetivo</strong> — no hace falta los dos. Los cobros de cuota se registran desde la solapa <strong>Cargar</strong>.</p>
@@ -2606,6 +2613,8 @@ export default function App() {
                 );
               })}
             </div>
+              </>
+            )}
           </div>
         )}
 
