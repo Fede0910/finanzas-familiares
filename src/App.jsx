@@ -1721,7 +1721,7 @@ export default function App() {
             <Card>
               <CardHead title="Evolución mensual por categoría" icon="📊" />
               <p className="muted small" style={{ marginBottom: 14 }}>
-                Tocá una categoría para ver el desglose por subcategoría (descripción). Verde = bajó, rojo = subió respecto al mes anterior. El filtro de persona aplica desde arriba.
+                Tocá una categoría para ver el desglose por subcategoría. Verde = bajó, rojo = subió respecto al mes anterior. El filtro de persona aplica desde arriba. Los movimientos sin subcategoría asignada solo cuentan en el total de la categoría.
               </p>
               {evolutionData.cats.length === 0 && <EmptyState msg="Sin egresos registrados." />}
               {evolutionData.cats.length > 0 && (() => {
