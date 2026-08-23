@@ -151,6 +151,39 @@ function ipcFactorBetween(ipcRows, fromDate, toDate) {
   return factor;
 }
 
+// Proyección de cuánto vamos a ganar en términos reales si el préstamo se cobra tal como está
+// pactado hasta el final. Lo ya cobrado se deflacta con el IPC real (mes a mes); lo que falta
+// cobrar se deflacta con el IPC real hasta hoy + un supuesto de inflación futura = promedio de los
+// últimos 6 meses de IPC conocido (lo más razonable sin poder adivinar el futuro).
+function computeProjectedRealGain(loan, remainingSchedule, collectedNominal, realCollected, ipcData) {
+  if (!ipcData.length || !remainingSchedule || !remainingSchedule.rows.length) return null;
+  const recent = ipcData.slice(-6);
+  const avgMonthly = recent.reduce((a, r) => a + Number(r.valor), 0) / recent.length / 100;
+  const pastFactor = ipcFactorBetween(ipcData, loan.startDate, today());
+  let realFuture = 0, nominalFuture = 0;
+  remainingSchedule.rows.forEach((r, i) => {
+    if (r.payment <= 0) return;
+    const factor = pastFactor * Math.pow(1 + avgMonthly, i + 1);
+    realFuture += r.payment / factor;
+    nominalFuture += r.payment;
+  });
+  const totalNominal = collectedNominal + nominalFuture;
+  const totalReal = realCollected + realFuture;
+  const principal = Number(loan.principal || 0);
+  return { avgMonthly, nominalGain: totalNominal - principal, realGain: totalReal - principal };
+}
+
+// Tasas de préstamos personales relevadas manualmente (no hay API pública confiable para esto).
+// Sirven como referencia para elegir una TNA intermedia al otorgar un préstamo — no son una
+// cotización exacta, varían por banco, perfil crediticio y momento.
+const REFERENCE_LOAN_RATES = [
+  { name: "Banco Nación (con sueldo)", tna: 56 },
+  { name: "Banco Santander", tna: 80 },
+  { name: "Banco Provincia", tna: 98 },
+  { name: "Banco Galicia", tna: 142 },
+];
+const REFERENCE_LOAN_RATES_DATE = "agosto 2026";
+
 function buildCategoryMap(rows) {
   const map = {};
   rows.forEach((r) => {
@@ -2520,6 +2553,10 @@ export default function App() {
                 <Field label="Cuota objetivo"><Input type="number" value={loanForm.targetInstallment} onChange={(e) => setLoanForm({ ...loanForm, targetInstallment: e.target.value, termMonths: "" })} placeholder="Opcional" /></Field>
                 <Field label="Notas"><Input value={loanForm.notes} onChange={(e) => setLoanForm({ ...loanForm, notes: e.target.value })} /></Field>
               </div>
+              <InfoBox color="blue">
+                Tasas de referencia (TNA) relevadas en {REFERENCE_LOAN_RATES_DATE} para elegir un valor intermedio — varían según banco y perfil, no son una cotización exacta:{" "}
+                {REFERENCE_LOAN_RATES.map((r, i) => <span key={r.name}>{i > 0 ? " · " : ""}{r.name}: <strong>{r.tna}%</strong></span>)}
+              </InfoBox>
               <div style={{ marginTop: 12 }}><Btn onClick={addLoan} disabled={saving || !loanForm.name || !loanForm.principal || (!loanForm.termMonths && !loanForm.targetInstallment)}>{saving ? "Guardando…" : "＋ Otorgar préstamo"}</Btn></div>
             </Card>
             <div className="debt-cards">
@@ -2531,7 +2568,7 @@ export default function App() {
                 const schedule = computeLoanSchedule(loan); // plan original, desde el desembolso
                 const remaining = computeLoanSchedule(loan, { principal: pending, startDate: today(), graceMonths: 0, installment: schedule.installment }); // real, desde hoy, misma cuota
                 const realCollected = loanPayments.filter((p) => p.loanId === loan.id).reduce((sum, p) => sum + Number(p.amount || 0) / ipcFactorBetween(ipcData, loan.startDate, p.date), 0);
-                const realGain = realCollected - Number(loan.principal || 0);
+                const projectedGain = computeProjectedRealGain(loan, remaining, collected, realCollected, ipcData);
                 const isExpanded = expandedLoans[loan.id];
                 const incForm = loanIncreaseForm[loan.id] || { amount: "", newInstallment: "" };
                 const previewIncrease = incForm.amount ? computeLoanSchedule(loan, {
@@ -2551,10 +2588,13 @@ export default function App() {
                     <div className="muted small" style={{ marginTop: 4 }}>
                       Cancelado: {pct.toFixed(1)}% · {pending <= 0 ? "Préstamo cancelado" : remaining.canCancel ? `Cuotas restantes desde hoy: ${remaining.estimatedTerm}` : "⚠️ La cuota actual no alcanza a cubrir el interés — nunca se cancela"}
                     </div>
-                    {ipcData.length > 0 && (
+                    {projectedGain && (
                       <div className="muted small" style={{ marginTop: 2 }}>
-                        Ganancia real (ajustada por IPC): <strong className={realGain >= 0 ? "green" : "red"}>{fmtArs(realGain)}</strong>
+                        Si se cobra tal como está pactado hasta el final — ganancia nominal: <strong>{fmtArs(projectedGain.nominalGain)}</strong> · ganancia real ajustada por IPC (asumiendo ~{(projectedGain.avgMonthly * 100).toFixed(1)}%/mes de inflación futura, promedio de los últimos 6 meses): <strong className={projectedGain.realGain >= 0 ? "green" : "red"}>{fmtArs(projectedGain.realGain)}</strong>
                       </div>
+                    )}
+                    {!projectedGain && ipcData.length === 0 && (
+                      <div className="muted small" style={{ marginTop: 2 }}>No se pudo cargar el IPC (INDEC) para calcular la ganancia real.</div>
                     )}
                     <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
                       <button className="del-btn" style={{ borderColor: "var(--primary)", color: "var(--primary)" }} onClick={() => setExpandedLoans((p) => ({ ...p, [loan.id]: !p[loan.id] }))}>
