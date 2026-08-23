@@ -330,6 +330,31 @@ function DescriptionAutocomplete({ value, onChange, suggestions }) {
   );
 }
 
+// Panel de edición completo de un movimiento (todos los campos, no solo importe/detalle).
+function MovementEditPanel({ data, onChange, types, categoryMap, subcategoryMap, categoryIdFor, people, onSave, onCancel }) {
+  return (
+    <div className="form-grid" style={{ margin: "8px 0", padding: 10, background: "#f8fafc", borderRadius: 10 }}>
+      <Field label="Fecha"><Input type="date" value={data.date} onChange={(e) => onChange({ ...data, date: e.target.value })} /></Field>
+      <Field label="Persona"><Select value={data.person} onChange={(v) => onChange({ ...data, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+      <Field label="Tipo"><Select value={data.type} onChange={(v) => onChange({ ...data, type: v, category: "", subcategoryId: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
+      <Field label="Categoría"><Select value={data.category} onChange={(v) => onChange({ ...data, category: v, subcategoryId: "" })}><option value="">Seleccionar…</option>{(categoryMap[data.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+      <Field label="Subcategoría">
+        <Select value={data.subcategoryId} onChange={(v) => onChange({ ...data, subcategoryId: v })}>
+          <option value="">Sin subcategoría</option>
+          {(subcategoryMap[categoryIdFor(data.type, data.category)] || []).map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+        </Select>
+      </Field>
+      <Field label="Detalle"><Input value={data.description} onChange={(e) => onChange({ ...data, description: e.target.value })} /></Field>
+      <Field label="Moneda"><Select value={data.currency} onChange={(v) => onChange({ ...data, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
+      <Field label="Importe"><Input type="number" value={data.originalAmount} onChange={(e) => onChange({ ...data, originalAmount: e.target.value })} /></Field>
+      <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
+        <Btn small onClick={onSave}>✓ Guardar</Btn>
+        <Btn small variant="outline" onClick={onCancel}>✕ Cancelar</Btn>
+      </div>
+    </div>
+  );
+}
+
 const TABS = [
   { id: "cargar", label: "📥 Cargar" },
   { id: "recurrentes", label: "🔁 Recurrentes" },
@@ -371,7 +396,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editingMovId, setEditingMovId] = useState(null);
-  const [editMovData, setEditMovData] = useState({ originalAmount: "", description: "" });
+  const [editMovData, setEditMovData] = useState({ date: "", person: "", type: "", category: "", subcategoryId: "", description: "", currency: "ARS", originalAmount: "" });
 
   const [reportMonth, setReportMonth] = useState(currentMonth());
   const [selectedPerson, setSelectedPerson] = useState("all");
@@ -811,20 +836,37 @@ export default function App() {
     setSaving(false);
   }
 
+  function startEditMovement(m) {
+    setEditingMovId(m.id);
+    setEditMovData({
+      date: m.date, person: m.person, type: m.type, category: m.category,
+      subcategoryId: m.subcategoryId ? String(m.subcategoryId) : "", description: m.description || "",
+      currency: m.currency, originalAmount: String(m.originalAmount),
+    });
+  }
+
   async function saveEditMovement(id) {
     const mov = movements.find((m) => m.id === id);
     if (!mov) return;
     const newAmount = Number(editMovData.originalAmount);
-    if (!newAmount) return;
-    const rate = mov.currency === "USD" ? mov.fxRate : 1;
-    const amountArs = mov.currency === "USD" ? newAmount * rate : newAmount;
-    const amountUsd = mov.currency === "USD" ? newAmount : amountArs / Math.max(blueRate, 1);
+    if (!newAmount || !editMovData.type || !editMovData.category) return;
+    // Si cambió de moneda usa la cotización actual; si sigue igual, respeta la que tenía el movimiento.
+    const rate = editMovData.currency === "USD" ? (editMovData.currency !== mov.currency ? blueRate : mov.fxRate) : 1;
+    const amountArs = toArs(newAmount, editMovData.currency, rate);
+    const amountUsd = editMovData.currency === "USD" ? newAmount : amountArs / Math.max(blueRate, 1);
+    const subcategoryId = editMovData.subcategoryId ? Number(editMovData.subcategoryId) : null;
     const { error } = await supabase.from("movements").update({
-      original_amount: newAmount, amount_ars: amountArs, amount_usd: amountUsd,
-      description: editMovData.description || null,
+      movement_date: editMovData.date, person: editMovData.person, type: editMovData.type, category: editMovData.category,
+      subcategory_id: subcategoryId, description: editMovData.description || null,
+      original_currency: editMovData.currency, original_amount: newAmount, fx_rate: rate,
+      amount_ars: amountArs, amount_usd: amountUsd,
     }).eq("id", id);
     if (!error) {
-      setMovements((prev) => prev.map((m) => m.id === id ? { ...m, originalAmount: newAmount, amountArs, amountUsd, description: editMovData.description } : m));
+      setMovements((prev) => prev.map((m) => m.id === id ? {
+        ...m, date: editMovData.date, person: editMovData.person, type: editMovData.type, category: editMovData.category,
+        subcategoryId, description: editMovData.description, currency: editMovData.currency, originalAmount: newAmount,
+        fxRate: rate, amountArs, amountUsd,
+      } : m));
     }
     setEditingMovId(null);
   }
@@ -1834,48 +1876,50 @@ export default function App() {
                       const isEditing = editingMovId === m.id;
                       const isClosed = monthlyBalances.find((b) => b.balance_month === monthKey(m.date) && b.closed);
                       return (
-                        <tr key={m.id}>
-                          <td>{m.date}</td>
-                          <td>
-                            {m.person}
-                            {m.sharedGroupId && (
-                              <span
-                                className="muted small"
-                                title={`Compartido con ${movements.filter((x) => x.sharedGroupId === m.sharedGroupId && x.id !== m.id).map((x) => x.person).join(", ")}`}
-                                style={{ marginLeft: 4 }}
-                              >🤝</span>
-                            )}
-                          </td>
-                          <td><Badge color={m.type === "Ingreso" ? "green" : m.type === "Egreso" ? "red" : m.type === "Ahorro" ? "blue" : "purple"}>{m.type}</Badge></td>
-                          <td>{m.category}</td>
-                          <td className="muted">{subcategoryNameById[m.subcategoryId] || "—"}</td>
-                          <td>{m.type === "Egreso" ? <Badge color={getFV(m.type, m.category) === "F" ? "red" : "amber"}>{getFV(m.type, m.category)}</Badge> : "—"}</td>
-                          <td className="muted">
-                            {isEditing
-                              ? <Input value={editMovData.description} onChange={(e) => setEditMovData((d) => ({ ...d, description: e.target.value }))} placeholder="Descripción" />
-                              : m.description || "—"}
-                          </td>
-                          <td>{m.currency}</td>
-                          <td className="number">
-                            {isEditing
-                              ? <Input type="number" value={editMovData.originalAmount} onChange={(e) => setEditMovData((d) => ({ ...d, originalAmount: e.target.value }))} style={{ width: 100 }} />
-                              : money(m.originalAmount, m.currency)}
-                          </td>
-                          <td className="number fw">{fmtArs(m.amountArs)}</td>
-                          <td className="number muted">{money(m.amountUsd || 0, "USD")}</td>
-                          <td style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                            {!isClosed && (
-                              isEditing
-                                ? <>
-                                    <button className="del-btn" style={{ borderColor: "#bbf7d0", color: "#16a34a" }} onClick={() => saveEditMovement(m.id)}>✓</button>
-                                    <button className="del-btn" onClick={() => setEditingMovId(null)}>✕</button>
-                                  </>
-                                : <button className="del-btn" style={{ borderColor: "#bfdbfe", color: "#1e40af" }} onClick={() => { setEditingMovId(m.id); setEditMovData({ originalAmount: String(m.originalAmount), description: m.description || "" }); }}>✏</button>
-                            )}
-                            {!isClosed && <button className="del-btn" onClick={() => deleteMovement(m.id)}>🗑</button>}
-                            {isClosed && <span className="muted small">🔒</span>}
-                          </td>
-                        </tr>
+                        <React.Fragment key={m.id}>
+                          <tr>
+                            <td>{m.date}</td>
+                            <td>
+                              {m.person}
+                              {m.sharedGroupId && (
+                                <span
+                                  className="muted small"
+                                  title={`Compartido con ${movements.filter((x) => x.sharedGroupId === m.sharedGroupId && x.id !== m.id).map((x) => x.person).join(", ")}`}
+                                  style={{ marginLeft: 4 }}
+                                >🤝</span>
+                              )}
+                            </td>
+                            <td><Badge color={m.type === "Ingreso" ? "green" : m.type === "Egreso" ? "red" : m.type === "Ahorro" ? "blue" : "purple"}>{m.type}</Badge></td>
+                            <td>{m.category}</td>
+                            <td className="muted">{subcategoryNameById[m.subcategoryId] || "—"}</td>
+                            <td>{m.type === "Egreso" ? <Badge color={getFV(m.type, m.category) === "F" ? "red" : "amber"}>{getFV(m.type, m.category)}</Badge> : "—"}</td>
+                            <td className="muted">{m.description || "—"}</td>
+                            <td>{m.currency}</td>
+                            <td className="number">{money(m.originalAmount, m.currency)}</td>
+                            <td className="number fw">{fmtArs(m.amountArs)}</td>
+                            <td className="number muted">{money(m.amountUsd || 0, "USD")}</td>
+                            <td style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                              {!isClosed && (
+                                isEditing
+                                  ? <button className="del-btn" onClick={() => setEditingMovId(null)}>✕</button>
+                                  : <button className="del-btn" style={{ borderColor: "#bfdbfe", color: "#1e40af" }} onClick={() => startEditMovement(m)}>✏</button>
+                              )}
+                              {!isClosed && <button className="del-btn" onClick={() => deleteMovement(m.id)}>🗑</button>}
+                              {isClosed && <span className="muted small">🔒</span>}
+                            </td>
+                          </tr>
+                          {isEditing && (
+                            <tr>
+                              <td colSpan={12}>
+                                <MovementEditPanel
+                                  data={editMovData} onChange={setEditMovData} types={types} categoryMap={categoryMap}
+                                  subcategoryMap={subcategoryMap} categoryIdFor={categoryIdFor} people={people}
+                                  onSave={() => saveEditMovement(m.id)} onCancel={() => setEditingMovId(null)}
+                                />
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
@@ -1898,11 +1942,8 @@ export default function App() {
                         </div>
                         <div style={{ display: "flex", gap: 4 }}>
                           {!isClosed && (isEditing
-                            ? <>
-                                <button className="del-btn" style={{ borderColor: "#bbf7d0", color: "#16a34a" }} onClick={() => saveEditMovement(m.id)}>✓</button>
-                                <button className="del-btn" onClick={() => setEditingMovId(null)}>✕</button>
-                              </>
-                            : <button className="del-btn" style={{ borderColor: "#bfdbfe", color: "#1e40af" }} onClick={() => { setEditingMovId(m.id); setEditMovData({ originalAmount: String(m.originalAmount), description: m.description || "" }); }}>✏</button>
+                            ? <button className="del-btn" onClick={() => setEditingMovId(null)}>✕</button>
+                            : <button className="del-btn" style={{ borderColor: "#bfdbfe", color: "#1e40af" }} onClick={() => startEditMovement(m)}>✏</button>
                           )}
                           {!isClosed && <button className="del-btn" onClick={() => deleteMovement(m.id)}>🗑</button>}
                           {isClosed && <span className="muted small">🔒</span>}
@@ -1911,19 +1952,17 @@ export default function App() {
                       <div className="mov-card-amounts">
                         <div><span className="muted small">Fecha</span><div>{m.date}</div></div>
                         <div><span className="muted small">Persona</span><div>{m.person}{m.sharedGroupId && <span className="muted small"> 🤝</span>}</div></div>
-                        <div><span className="muted small">{m.currency === "USD" ? "USD" : "ARS"}</span>
-                          <div className="fw">
-                            {isEditing
-                              ? <Input type="number" value={editMovData.originalAmount} onChange={(e) => setEditMovData((d) => ({ ...d, originalAmount: e.target.value }))} />
-                              : money(m.originalAmount, m.currency)}
-                          </div>
-                        </div>
+                        <div><span className="muted small">{m.currency === "USD" ? "USD" : "ARS"}</span><div className="fw">{money(m.originalAmount, m.currency)}</div></div>
                         <div><span className="muted small">ARS</span><div className="fw">{fmtArs(m.amountArs)}</div></div>
                       </div>
+                      {m.description && <div className="muted small">{m.description}</div>}
                       {isEditing && (
-                        <Input value={editMovData.description} onChange={(e) => setEditMovData((d) => ({ ...d, description: e.target.value }))} placeholder="Descripción" />
+                        <MovementEditPanel
+                          data={editMovData} onChange={setEditMovData} types={types} categoryMap={categoryMap}
+                          subcategoryMap={subcategoryMap} categoryIdFor={categoryIdFor} people={people}
+                          onSave={() => saveEditMovement(m.id)} onCancel={() => setEditingMovId(null)}
+                        />
                       )}
-                      {!isEditing && m.description && <div className="muted small">{m.description}</div>}
                     </div>
                   );
                 })}
