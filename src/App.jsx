@@ -1263,8 +1263,9 @@ export default function App() {
       planned_amount_ars: Number(budgetForm.planned),
     }]).select().single();
     if (data) setBudgets((prev) => [{ id: data.id, month: data.budget_month, person: data.person, type: data.type, category: data.category, planned: data.planned_amount_ars }, ...prev]);
-    // Mantiene mes/persona/tipo, solo limpia importe
-    setBudgetForm((f) => ({ ...f, planned: "" }));
+    // Mantiene mes/persona/tipo (conviene para cargar varias líneas seguidas), pero limpia
+    // categoría e importe -- si no, quedaba "pegada" la última categoría cargada.
+    setBudgetForm((f) => ({ ...f, category: "", planned: "" }));
   }
   async function deleteBudget(id) {
     await supabase.from("budgets").delete().eq("id", id);
@@ -1634,8 +1635,12 @@ export default function App() {
 
   // Evolución mensual por categoría+descripción
   const evolutionData = useMemo(() => {
-    // Todos los meses con datos
-    const months = [...new Set(personMovements.map((m) => monthKey(m.date)))].sort();
+    // Meses con datos, hasta el mes actual — sin este corte, los meses futuros generados por
+    // débito automático y tarjeta en cuotas (que llegan varios meses adelante) desplazaban a los
+    // meses pasados reales fuera de la ventana visible, y encima esas cuotas fijas siempre
+    // repetidas mostraban 0% de variación (nada interesante para comparar).
+    const thisMonth = currentMonth();
+    const months = [...new Set(personMovements.map((m) => monthKey(m.date)).filter((mo) => mo <= thisMonth))].sort();
     // Todas las categorías con egresos
     const cats = [...new Set(personMovements.filter((m) => m.type === "Egreso").map((m) => m.category))].sort();
     // Por categoría → por descripción → por mes
@@ -1706,6 +1711,17 @@ export default function App() {
       return true;
     });
   }, [personMovements, filters, getFV, subcategoryNameById]);
+
+  // Suma de lo filtrado/buscado en Datos, para que se vea el total sin tener que sumar a mano.
+  const filteredMovementsTotals = useMemo(() => {
+    const byType = {};
+    let netArs = 0;
+    filteredMovements.forEach((m) => {
+      byType[m.type] = (byType[m.type] || 0) + m.amountArs;
+      netArs += m.type === "Ingreso" ? m.amountArs : -m.amountArs;
+    });
+    return { byType, netArs };
+  }, [filteredMovements]);
 
   const goalProgress = useMemo(() => {
     return personGoals.filter((g) => g.active !== false).map((g) => {
@@ -1859,8 +1875,10 @@ export default function App() {
                       .map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
                   </Select>
                 </Field>
-                <Field label="F/V"><Select value={filters.fv} onChange={(v) => setFilters({ ...filters, fv: v })}><option value="all">Todos</option><option value="F">Fijos</option><option value="V">Variables</option></Select></Field>
+                {/* Categoría + Subcategoría + Buscar van juntas (las tres apuntan a "qué es" el
+                    movimiento); F/V es un filtro aparte, se corre al final. */}
                 <Field label="Buscar"><Input value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} placeholder="Ej. Dany" /></Field>
+                <Field label="F/V"><Select value={filters.fv} onChange={(v) => setFilters({ ...filters, fv: v })}><option value="all">Todos</option><option value="F">Fijos</option><option value="V">Variables</option></Select></Field>
               </>
             )}
           </div>
@@ -2069,17 +2087,19 @@ export default function App() {
                 const genMovs = movements.filter((m) => m.seriesId === s.id);
                 const pending = genMovs.filter((m) => m.date > today()).length;
                 return (
-                  <div key={s.id} className="budget-inline-row" style={{ flexWrap: "wrap" }}>
-                    <div className="budget-inline-left">
-                      <span className="budget-inline-cat">
+                  // Fila propia (no .budget-inline-row): ese layout reserva una columna angosta de
+                  // 150px para el texto, que acá queda muy apretado con todo el detalle de la serie.
+                  <div key={s.id} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "9px 0", borderBottom: "1px solid var(--border)" }}>
+                    <div>
+                      <span className="fw" style={{ fontSize: "0.92rem" }}>
                         {s.kind === "tarjeta_cuotas" ? "💳" : "🔁"} {s.category}
                         {s.subcategory_id && subcategoryNameById[s.subcategory_id] ? ` · ${subcategoryNameById[s.subcategory_id]}` : ""}
                       </span>
-                      <span className="muted small">
+                      <div className="muted small" style={{ marginTop: 2 }}>
                         {s.person} · {money(s.installment_amount, s.currency)}{s.kind === "tarjeta_cuotas" ? ` · cuota ${Math.max(0, (s.installments_total || 0) - pending)}/${s.installments_total} · ${cardNameById[s.card_id] || "tarjeta"}` : ` · día ${s.day_of_month}`} · {s.start_date} → {s.end_date}
-                      </span>
+                      </div>
                     </div>
-                    <div className="budget-inline-right" style={{ gap: 8, alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                       <Input type="date" value={seriesEndDateInputs[s.id] || s.end_date} onChange={(e) => setSeriesEndDateInputs((p) => ({ ...p, [s.id]: e.target.value }))} />
                       <Btn small variant="outline" onClick={() => truncateSeries(s, seriesEndDateInputs[s.id] || s.end_date)}>Definir fin</Btn>
                       <button className="del-btn" onClick={() => deleteSeries(s)}>🗑</button>
@@ -2350,8 +2370,10 @@ export default function App() {
                       <div className="mov-card-amounts">
                         <div><span className="muted small">Fecha</span><div>{m.date}</div></div>
                         <div><span className="muted small">Persona</span><div>{m.person}{m.sharedGroupId && <span className="muted small"> 🤝</span>}</div></div>
-                        <div><span className="muted small">{m.currency === "USD" ? "USD" : "ARS"}</span><div className="fw">{money(m.originalAmount, m.currency)}</div></div>
+                        {/* Siempre ARS + USD (nunca duplicados): si la moneda original ya es una de las
+                            dos, esa celda es directamente el importe cargado; si no, es la conversión. */}
                         <div><span className="muted small">ARS</span><div className="fw">{fmtArs(m.amountArs)}</div></div>
+                        <div><span className="muted small">USD</span><div className="fw muted">{money(m.amountUsd || 0, "USD")}</div></div>
                       </div>
                       {m.description && <div className="muted small">{m.description}</div>}
                       {isEditing && (
@@ -2367,6 +2389,18 @@ export default function App() {
                 {filteredMovements.length === 0 && <EmptyState msg="No hay movimientos con esos filtros." />}
               </div>
             </Card>
+
+            {filteredMovements.length > 0 && (
+              <Card>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 20px", alignItems: "center", fontSize: "0.9rem" }}>
+                  <strong style={{ fontSize: "0.95rem" }}>Total de lo filtrado:</strong>
+                  {Object.entries(filteredMovementsTotals.byType).map(([type, total]) => (
+                    <span key={type}><span className="muted small">{type}</span> <strong className={type === "Ingreso" ? "green" : "red"}>{fmtArs(total)}</strong></span>
+                  ))}
+                  <span><span className="muted small">Neto</span> <strong className={filteredMovementsTotals.netArs >= 0 ? "green" : "red"}>{fmtArs(filteredMovementsTotals.netArs)}</strong></span>
+                </div>
+              </Card>
+            )}
           </div>
         )}
 
@@ -2431,7 +2465,7 @@ export default function App() {
                 <Field label="Mes"><Input type="month" value={budgetForm.month} onChange={(e) => setBudgetForm({ ...budgetForm, month: e.target.value })} /></Field>
                 <Field label="Persona"><Select value={budgetForm.person} onChange={(v) => setBudgetForm({ ...budgetForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
                 <Field label="Tipo"><Select value={budgetForm.type} onChange={(v) => setBudgetForm({ ...budgetForm, type: v, category: (categoryMap[v] || [])[0] || "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                <Field label="Categoría"><Select value={budgetForm.category} onChange={(v) => setBudgetForm({ ...budgetForm, category: v })}>{(categoryMap[budgetForm.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+                <Field label="Categoría"><Select value={budgetForm.category} onChange={(v) => setBudgetForm({ ...budgetForm, category: v })}><option value="">Elegir…</option>{(categoryMap[budgetForm.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
                 <Field label="Importe presupuestado"><MoneyInput value={budgetForm.planned} onChange={(e) => setBudgetForm({ ...budgetForm, planned: e.target.value })} placeholder="0" /></Field>
               </div>
               {budgetAvgSuggestion !== null && (
@@ -2443,7 +2477,7 @@ export default function App() {
                   >Usar este valor</button>
                 </InfoBox>
               )}
-              <div style={{ marginTop: 12 }}><Btn onClick={addBudget}>＋ Agregar línea</Btn></div>
+              <div style={{ marginTop: 12 }}><Btn onClick={addBudget} disabled={!budgetForm.category || !budgetForm.planned}>＋ Agregar línea</Btn></div>
             </Card>
 
             {expectedLoanCollectionsByMonth.length > 0 && (
@@ -2841,6 +2875,7 @@ export default function App() {
                   <strong>📋 Simulación (pendiente de aceptar — todavía no se guardó nada):</strong>
                   <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: "6px 18px" }}>
                     <span>Cuota: <strong>{money(loanPreview.schedule.installment)}</strong></span>
+                    <span>Primera cuota: <strong>{loanPreview.schedule.rows.find((r) => !r.inGrace)?.date ?? "—"}</strong></span>
                     <span>Plazo estimado: <strong>{loanPreview.schedule.estimatedTerm ?? "—"} meses</strong></span>
                     {!loanPreview.schedule.canCancel && <span style={{ color: "var(--red)" }}>⚠️ La cuota no alcanza a cubrir el interés: nunca se cancela.</span>}
                     {loanPreview.gain && (
