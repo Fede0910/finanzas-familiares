@@ -166,7 +166,9 @@ function computeLoanSchedule(loan, overrides = {}) {
     const payment = inGrace ? 0 : Math.min(installment, interest + balance);
     let principalPortion = inGrace ? 0 : Math.min(payment - interest, balance);
     let closingBalance = inGrace ? balance + interest : Math.max(0, balance - principalPortion);
-    rows.push({ period: period + 1, date: dates[period], openingBalance: balance, interest, payment, principalPortion, closingBalance });
+    // installmentNo numera solo las cuotas que realmente se cobran (no los meses de gracia, que no
+    // son "cuota 1" — son gracia). period sigue siendo el índice de fila crudo (para claves/fechas).
+    rows.push({ period: period + 1, installmentNo: inGrace ? null : period + 1 - grace, inGrace, date: dates[period], openingBalance: balance, interest, payment, principalPortion, closingBalance });
     balance = closingBalance;
     if (!inGrace && balance <= 0.5) break;
   }
@@ -2908,7 +2910,7 @@ export default function App() {
                           <tbody>
                             {schedule.rows.slice(0, 36).map((r) => (
                               <tr key={r.period} style={{ borderBottom: "1px solid var(--border)" }}>
-                                <td style={{ padding: "4px 8px" }}>{r.period}</td>
+                                <td style={{ padding: "4px 8px" }}>{r.inGrace ? <span className="muted">Gracia</span> : r.installmentNo}</td>
                                 <td style={{ textAlign: "right", padding: "4px 8px" }}>{r.date}</td>
                                 <td style={{ textAlign: "right", padding: "4px 8px" }} className="muted">{fmtArs(r.interest)}</td>
                                 <td style={{ textAlign: "right", padding: "4px 8px" }}>{fmtArs(r.payment)}</td>
