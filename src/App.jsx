@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -41,8 +41,15 @@ const money = (n, cur = "ARS") =>
     maximumFractionDigits: cur === "USD" ? 2 : 0,
   }).format(Number(n || 0));
 
-const today = () => new Date().toISOString().slice(0, 10);
-const currentMonth = () => new Date().toISOString().slice(0, 7);
+// OJO: no usar toISOString() acá — convierte a UTC, y Argentina está 3 horas atrás. Cerca de
+// medianoche local (21hs a 23:59) toISOString ya muestra el día/mes siguiente aunque acá todavía
+// sea "ayer". Se arma la fecha a partir de los componentes locales para que coincida con el
+// calendario real del usuario.
+const today = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const currentMonth = () => today().slice(0, 7);
 
 const monthKey = (d) => {
   const dt = new Date(`${d}T00:00:00`);
@@ -51,6 +58,24 @@ const monthKey = (d) => {
 
 const toArs = (amount, currency, rate) =>
   currency === "USD" ? Number(amount || 0) * Number(rate || 1) : Number(amount || 0);
+
+// Promedio real de hasta 3 meses anteriores con movimientos para una combinación
+// persona+tipo+categoría, buscando hacia atrás hasta 12 meses para saltear meses sin datos (ej. el
+// primer mes que se usó una categoría). Con 1 mes real usa ese; con 2, promedia esos 2; con 3+,
+// promedia los últimos 3. Se usa tanto para la sugerencia al cargar una línea a mano como para el
+// presupuesto automático de mes nuevo.
+function computeBudgetAvg(targetMonth, person, type, category, movs) {
+  const [y, m] = targetMonth.split("-").map(Number);
+  const found = [];
+  for (let n = 1; n <= 12 && found.length < 3; n++) {
+    const d = new Date(y, m - 1 - n, 1);
+    const mo = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const monthMovs = movs.filter((mv) => monthKey(mv.date) === mo && mv.person === person && mv.type === type && mv.category === category);
+    if (monthMovs.length) found.push(monthMovs.reduce((a, mv) => a + mv.amountArs, 0));
+  }
+  if (!found.length) return null;
+  return { value: Math.round(found.reduce((a, b) => a + b, 0) / found.length), months: found.length };
+}
 
 function mapMovementRow(m) {
   return {
@@ -493,6 +518,8 @@ export default function App() {
   const [debtForm, setDebtForm] = useState({ name: "", owner: "Federico", balance: "", installment: "", dueDay: "", priority: "Media", rate: "", notes: "" });
   const [goalForm, setGoalForm] = useState({ name: categoryMap["Ahorro"]?.[0] || "", owner: "Federico", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
   const [budgetForm, setBudgetForm] = useState({ month: currentMonth(), person: "Federico", type: "Egreso", category: "Supermercado", planned: "" });
+  const [editingBudgetId, setEditingBudgetId] = useState(null);
+  const [editBudgetData, setEditBudgetData] = useState({ person: "", type: "", category: "", planned: "" });
   const [debtPayForm, setDebtPayForm] = useState({ debtId: "", date: today(), amount: "", person: "Federico", notes: "" });
   const [loanForm, setLoanForm] = useState({
     name: "", principal: "", annualRate: "", startDate: today(),
@@ -634,6 +661,25 @@ export default function App() {
     }
     fetchIpc();
   }, []);
+
+  // Presupuesto automático al pasar de mes: si el mes que se está mirando en Presupuesto todavía
+  // no tiene ninguna línea cargada, se copian solas las del mes anterior (una vez por mes — el ref
+  // evita reintentar en cada render, y no pisa nada si ya hay algo cargado). today()/currentMonth()
+  // ya usan hora local, así que esto no se dispara de más ni de menos por huso horario.
+  const autoBudgetedMonthsRef = useRef(new Set());
+  useEffect(() => {
+    if (loading) return;
+    if (autoBudgetedMonthsRef.current.has(reportMonth)) return;
+    autoBudgetedMonthsRef.current.add(reportMonth);
+    const hasThisMonth = budgets.some((b) => b.month === reportMonth);
+    if (hasThisMonth) return;
+    copyBudgetFromPrevMonth(reportMonth).then((result) => {
+      if (result?.count > 0) {
+        setCopyBudgetMsg(`✓ Presupuesto de ${reportMonth} generado automáticamente (${result.count} línea${result.count !== 1 ? "s" : ""}, promedio/valores del mes anterior)`);
+        setTimeout(() => setCopyBudgetMsg(""), 6000);
+      }
+    });
+  }, [reportMonth, loading]);
 
   const getFV = useCallback((type, category) => categoryFVMap[`${type}__${category}`] || "V", [categoryFVMap]);
   const subcategoryMap = useMemo(() => buildSubcategoryMap(subcategoryRows), [subcategoryRows]);
@@ -1199,6 +1245,37 @@ export default function App() {
     setBudgets((prev) => prev.filter((b) => b.id !== id));
   }
 
+  function startEditBudget(b) {
+    setEditingBudgetId(b.id);
+    setEditBudgetData({ person: b.person, type: b.type, category: b.category, planned: String(b.planned) });
+  }
+  async function saveEditBudget(id) {
+    const planned = Number(editBudgetData.planned);
+    if (!editBudgetData.person || !editBudgetData.type || !editBudgetData.category || !planned) return;
+    const original = budgets.find((b) => b.id === id);
+    const duplicate = budgets.find((b) =>
+      b.id !== id && b.month === original?.month && b.person === editBudgetData.person &&
+      b.type === editBudgetData.type && b.category === editBudgetData.category
+    );
+    if (duplicate) {
+      setCopyBudgetMsg(`⚠️ Ya existe "${editBudgetData.category}" para ${editBudgetData.person} en ese mes.`);
+      setTimeout(() => setCopyBudgetMsg(""), 5000);
+      return;
+    }
+    const { error } = await supabase.from("budgets").update({
+      person: editBudgetData.person, type: editBudgetData.type, category: editBudgetData.category, planned_amount_ars: planned,
+    }).eq("id", id);
+    if (!error) {
+      setBudgets((prev) => prev.map((b) => b.id === id ? { ...b, person: editBudgetData.person, type: editBudgetData.type, category: editBudgetData.category, planned } : b));
+    }
+    setEditingBudgetId(null);
+  }
+
+  // A pesar del nombre (histórico), esto ya no copia el importe planificado del mes anterior tal
+  // cual: usa el mes anterior solo para saber QUÉ combinaciones persona+tipo+categoría veníamos
+  // presupuestando, y para cada una recalcula el importe como el promedio real de hasta 3 meses
+  // anteriores (computeBudgetAvg) — así el presupuesto se autoajusta solo, en vez de arrastrar para
+  // siempre el primer número que se haya puesto.
   async function copyBudgetFromPrevMonth(targetMonth) {
     // Calcular mes anterior
     const [y, m] = targetMonth.split("-").map(Number);
@@ -1206,16 +1283,21 @@ export default function App() {
     const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
     const prevBudgets = budgets.filter((b) => b.month === prevMonth);
     if (!prevBudgets.length) return { count: 0 };
-    // Solo copiar los que no existen ya en el mes destino
+    // Solo generar los que no existen ya en el mes destino
     const existing = budgets.filter((b) => b.month === targetMonth);
     const toInsert = prevBudgets.filter((pb) =>
       !existing.some((eb) => eb.person === pb.person && eb.type === pb.type && eb.category === pb.category)
     );
     if (!toInsert.length) return { count: 0, skipped: true };
-    const rows = toInsert.map((b) => ({
-      budget_month: targetMonth, person: b.person, type: b.type,
-      category: b.category, planned_amount_ars: b.planned,
-    }));
+    const rows = toInsert.map((b) => {
+      const avg = computeBudgetAvg(targetMonth, b.person, b.type, b.category, movements);
+      return {
+        budget_month: targetMonth, person: b.person, type: b.type, category: b.category,
+        // Si todavía no hay movimientos reales para promediar (categoría nueva, recién arrancando),
+        // usa como base lo que estaba planificado el mes anterior en vez de dejarlo en $0.
+        planned_amount_ars: avg ? avg.value : b.planned,
+      };
+    });
     const { data } = await supabase.from("budgets").insert(rows).select();
     if (data) {
       setBudgets((prev) => [
@@ -1350,9 +1432,10 @@ export default function App() {
     return map;
   }, [loanPayments]);
 
-  // Cobros de préstamos esperados para el mes de Presupuesto elegido — en base al saldo real
-  // pendiente hoy de cada préstamo (no el plan original), así refleja pagos ya adelantados o
-  // atrasados. Es solo informativo: no reemplaza al presupuesto por categoría.
+  // Cobros de préstamos esperados para el mes que se está viendo en Presupuesto (reportMonth, el
+  // mismo que usa la tabla Presupuesto vs Real) — en base al saldo real pendiente hoy de cada
+  // préstamo (no el plan original), así refleja pagos ya adelantados o atrasados. No se guarda en
+  // `budgets`: se calcula en vivo, así nunca se "pega" ni se copia de un mes a otro por accidente.
   const expectedLoanCollectionsByMonth = useMemo(() => {
     return loans.map((loan) => {
       const collected = loanCollectedById[loan.id] || 0;
@@ -1360,10 +1443,10 @@ export default function App() {
       if (pending <= 0) return { loan, amount: 0 };
       const base = computeLoanSchedule(loan);
       const remaining = computeLoanSchedule(loan, { principal: pending, startDate: today(), graceMonths: 0, installment: base.installment });
-      const amount = remaining.rows.filter((r) => monthKey(r.date) === budgetForm.month && r.payment > 0).reduce((a, r) => a + r.payment, 0);
+      const amount = remaining.rows.filter((r) => monthKey(r.date) === reportMonth && r.payment > 0).reduce((a, r) => a + r.payment, 0);
       return { loan, amount };
     }).filter((x) => x.amount > 0);
-  }, [loans, loanCollectedById, budgetForm.month]);
+  }, [loans, loanCollectedById, reportMonth]);
   const selectedLoanForPay = loans.find((l) => String(l.id) === String(loanPayForm.loanId));
   const loanForwardScheduleForPay = useMemo(() => {
     if (!selectedLoanForPay) return null;
@@ -1453,18 +1536,10 @@ export default function App() {
   // Promedio de los últimos meses con datos reales para esta persona+tipo+categoría — si sólo hay
   // 1 mes de historial (ej. recién arrancado) usa ese, con 2 promedia esos 2, y a partir de 3 siempre
   // toma los 3 más recientes (no un promedio histórico acumulado).
-  const budgetAvgSuggestion = useMemo(() => {
-    const [y, m] = budgetForm.month.split("-").map(Number);
-    const found = [];
-    for (let n = 1; n <= 12 && found.length < 3; n++) {
-      const d = new Date(y, m - 1 - n, 1);
-      const mo = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      const monthMovs = personMovements.filter((mv) => monthKey(mv.date) === mo && mv.person === budgetForm.person && mv.type === budgetForm.type && mv.category === budgetForm.category);
-      if (monthMovs.length) found.push(monthMovs.reduce((a, mv) => a + mv.amountArs, 0));
-    }
-    if (!found.length) return null;
-    return { value: Math.round(found.reduce((a, b) => a + b, 0) / found.length), months: found.length };
-  }, [personMovements, budgetForm.month, budgetForm.person, budgetForm.type, budgetForm.category]);
+  const budgetAvgSuggestion = useMemo(
+    () => computeBudgetAvg(budgetForm.month, budgetForm.person, budgetForm.type, budgetForm.category, personMovements),
+    [personMovements, budgetForm.month, budgetForm.person, budgetForm.type, budgetForm.category]
+  );
 
   const monthlyExpenseByFV = useMemo(() => {
     const monthEgresos = personMovements.filter((m) => m.type === "Egreso" && monthKey(m.date) === reportMonth);
@@ -1559,7 +1634,7 @@ export default function App() {
   }, [personMovements, amountDisplay, subcategoryNameById]);
 
   const budgetComparison = useMemo(() => {
-    return budgets
+    const rows = budgets
       .filter((b) => b.month === reportMonth && (selectedPerson === "all" || b.person === selectedPerson))
       .map((b) => {
         const actual = personMovements
@@ -1568,7 +1643,25 @@ export default function App() {
         const execution = b.planned > 0 ? (actual / b.planned) * 100 : 0;
         return { ...b, actual, difference: b.planned - actual, execution };
       });
-  }, [budgets, personMovements, reportMonth, selectedPerson]);
+    // Préstamos no se carga a mano ni se copia de mes anterior: se calcula en vivo a partir del
+    // cronograma real, y se agrega como una línea más de Ingreso · Prestamos (sintética, no vive
+    // en `budgets`). Solo tiene sentido con el filtro global de persona en "Todas" — es plata de
+    // la familia, no de una persona puntual.
+    if (selectedPerson === "all") {
+      const planned = expectedLoanCollectionsByMonth.reduce((a, x) => a + x.amount, 0);
+      const actual = movements
+        .filter((m) => monthKey(m.date) === reportMonth && m.type === "Ingreso" && m.category === "Prestamos")
+        .reduce((a, c) => a + c.amountArs, 0);
+      if (planned > 0 || actual > 0) {
+        rows.push({
+          id: "loans-synthetic", month: reportMonth, person: "Familia", type: "Ingreso", category: "Prestamos",
+          planned, actual, difference: planned - actual, execution: planned > 0 ? (actual / planned) * 100 : 0,
+          synthetic: true,
+        });
+      }
+    }
+    return rows;
+  }, [budgets, personMovements, movements, reportMonth, selectedPerson, expectedLoanCollectionsByMonth]);
 
   const filteredMovements = useMemo(() => {
     const q = filters.search.trim().toLowerCase();
@@ -2299,13 +2392,13 @@ export default function App() {
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   {copyBudgetMsg && <span className="muted small">{copyBudgetMsg}</span>}
                   <Btn small variant="outline" onClick={async () => {
-                    setCopyBudgetMsg("Copiando…");
+                    setCopyBudgetMsg("Generando…");
                     const result = await copyBudgetFromPrevMonth(budgetForm.month);
                     if (result.skipped) setCopyBudgetMsg("Ya están todos cargados para este mes.");
-                    else if (result.count === 0) setCopyBudgetMsg("No hay presupuesto en el mes anterior.");
-                    else setCopyBudgetMsg(`✓ ${result.count} línea${result.count !== 1 ? "s" : ""} copiada${result.count !== 1 ? "s" : ""}`);
-                    setTimeout(() => setCopyBudgetMsg(""), 3000);
-                  }}>📋 Copiar mes anterior</Btn>
+                    else if (result.count === 0) setCopyBudgetMsg("No hay presupuesto en el mes anterior del que partir.");
+                    else setCopyBudgetMsg(`✓ ${result.count} línea${result.count !== 1 ? "s" : ""} generada${result.count !== 1 ? "s" : ""} (promedio de meses anteriores)`);
+                    setTimeout(() => setCopyBudgetMsg(""), 4000);
+                  }}>📋 Generar mes (promedio)</Btn>
                 </div>
               </div>
               <div className="form-grid">
@@ -2330,7 +2423,7 @@ export default function App() {
             {expectedLoanCollectionsByMonth.length > 0 && (
               <Card>
                 <CardHead title="Cobros de préstamos esperados este mes" icon="🏦" />
-                <p className="muted small" style={{ marginBottom: 10 }}>En base al saldo real pendiente de cada préstamo — no es parte del presupuesto por categoría, es un ingreso adicional a tener en cuenta para {budgetForm.month}.</p>
+                <p className="muted small" style={{ marginBottom: 10 }}>En base al saldo real pendiente de cada préstamo — ya está incluido más abajo en Ingreso · Prestamos de "Presupuesto vs Real" para {reportMonth}, esto es el detalle por préstamo.</p>
                 {expectedLoanCollectionsByMonth.map(({ loan, amount }) => (
                   <div key={loan.id} className="balance-row"><span>{loan.name}</span><strong className="green">{fmtArs(amount)}</strong></div>
                 ))}
@@ -2362,26 +2455,47 @@ export default function App() {
                       // Signo correcto: egreso/ahorro/inversión superado = negativo; ingreso superado = positivo
                       const diff = isExp ? b.planned - b.actual : b.actual - b.planned;
                       const diffColor = diff >= 0 ? "green" : "red";
+                      const isEditing = editingBudgetId === b.id;
                       return (
-                        <div key={b.id} className="budget-inline-row">
-                          <div className="budget-inline-left">
-                            <span className="budget-inline-cat">{b.category}</span>
-                            <span className="muted small">{b.person}</span>
-                          </div>
-                          <div className="budget-inline-bar-wrap">
-                            <div className="budget-inline-bar-track">
-                              <div className="budget-inline-bar-fill" style={{ width: `${pct}%`, background: barColor }} />
+                        <React.Fragment key={b.id}>
+                          <div className="budget-inline-row">
+                            <div className="budget-inline-left">
+                              <span className="budget-inline-cat">{b.category}{b.synthetic && <span className="muted small"> 🏦 auto</span>}</span>
+                              <span className="muted small">{b.person}</span>
                             </div>
-                            <div className="budget-inline-nums">
-                              <span className="muted small">{fmt(displayCurrency === "USD" ? b.actual/Math.max(blueRate,1) : b.actual)} / {fmt(displayCurrency === "USD" ? b.planned/Math.max(blueRate,1) : b.planned)}</span>
-                              <span style={{ fontSize: "0.8rem", fontWeight: 700, color: diffColor }}>{diff >= 0 ? "+" : ""}{fmt(displayCurrency === "USD" ? diff/Math.max(blueRate,1) : diff)}</span>
+                            <div className="budget-inline-bar-wrap">
+                              <div className="budget-inline-bar-track">
+                                <div className="budget-inline-bar-fill" style={{ width: `${pct}%`, background: barColor }} />
+                              </div>
+                              <div className="budget-inline-nums">
+                                <span className="muted small">{fmt(displayCurrency === "USD" ? b.actual/Math.max(blueRate,1) : b.actual)} / {fmt(displayCurrency === "USD" ? b.planned/Math.max(blueRate,1) : b.planned)}</span>
+                                <span style={{ fontSize: "0.8rem", fontWeight: 700, color: diffColor }}>{diff >= 0 ? "+" : ""}{fmt(displayCurrency === "USD" ? diff/Math.max(blueRate,1) : diff)}</span>
+                              </div>
+                            </div>
+                            <div className="budget-inline-right">
+                              <Badge color={badgeColor}>{b.execution.toFixed(0)}%</Badge>
+                              {!b.synthetic && (
+                                isEditing
+                                  ? <button className="del-btn" onClick={() => setEditingBudgetId(null)}>✕</button>
+                                  : <button className="del-btn" style={{ borderColor: "var(--primary)", color: "var(--primary)" }} onClick={() => startEditBudget(b)}>✏</button>
+                              )}
+                              {!b.synthetic && <button className="del-btn" onClick={() => deleteBudget(b.id)}>🗑</button>}
+                              {b.synthetic && <span className="muted small" title="Se calcula solo, en base al cronograma real de los préstamos activos — no se puede editar ni borrar acá.">ℹ️</span>}
                             </div>
                           </div>
-                          <div className="budget-inline-right">
-                            <Badge color={badgeColor}>{b.execution.toFixed(0)}%</Badge>
-                            <button className="del-btn" onClick={() => deleteBudget(b.id)}>🗑</button>
-                          </div>
-                        </div>
+                          {isEditing && (
+                            <div className="form-grid" style={{ margin: "4px 0 10px", padding: 10, background: "var(--surface-2)", borderRadius: 10 }}>
+                              <Field label="Persona"><Select value={editBudgetData.person} onChange={(v) => setEditBudgetData({ ...editBudgetData, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                              <Field label="Tipo"><Select value={editBudgetData.type} onChange={(v) => setEditBudgetData({ ...editBudgetData, type: v, category: (categoryMap[v] || [])[0] || "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
+                              <Field label="Categoría"><Select value={editBudgetData.category} onChange={(v) => setEditBudgetData({ ...editBudgetData, category: v })}>{(categoryMap[editBudgetData.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+                              <Field label="Importe presupuestado"><Input type="number" value={editBudgetData.planned} onChange={(e) => setEditBudgetData({ ...editBudgetData, planned: e.target.value })} /></Field>
+                              <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
+                                <Btn small onClick={() => saveEditBudget(b.id)}>✓ Guardar</Btn>
+                                <Btn small variant="outline" onClick={() => setEditingBudgetId(null)}>✕ Cancelar</Btn>
+                              </div>
+                            </div>
+                          )}
+                        </React.Fragment>
                       );
                     })}
                   </div>
