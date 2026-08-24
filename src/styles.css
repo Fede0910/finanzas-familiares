@@ -75,6 +75,12 @@ body {
 .card {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow);
+  /* Sin esto, un hijo con scroll horizontal propio (ej. .filter-grid) hace que la card entera crezca
+     para no recortar su contenido -- son ítems de un grid, y por default un ítem de grid no se
+     achica por debajo del tamaño de su contenido (min-width: auto). Con min-width: 0 sí respeta el
+     ancho real de la columna, y el overflow-x:auto interno funciona como scroll, no como estirón de
+     toda la página. */
+  min-width: 0;
 }
 .card-head {
   display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
@@ -106,7 +112,13 @@ body {
 }
 .form-grid.three-col { grid-template-columns: repeat(3, 1fr); }
 .form-grid.two-col-form { grid-template-columns: repeat(2, 1fr); }
-.filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+/* Todos los filtros en una sola línea, con scroll horizontal si no entran -- igual que la barra de
+   tabs. Cada campo tiene un ancho fijo para no quedar aplastado. */
+.filter-grid {
+  display: flex; flex-wrap: nowrap; gap: 10px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+  padding-bottom: 4px;
+}
+.filter-grid .field { flex: 0 0 148px; min-width: 148px; }
 
 /* ── Buttons ── */
 .btn {
@@ -324,7 +336,6 @@ body {
 @media (max-width: 1100px) {
   .stats-grid { grid-template-columns: repeat(3, 1fr); }
   .form-grid { grid-template-columns: repeat(2, 1fr); }
-  .filter-grid { grid-template-columns: repeat(3, 1fr); }
 }
 
 @media (max-width: 780px) {
@@ -338,7 +349,7 @@ body {
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   /* Dos celdas por línea en vez de una sola — reduce mucho el scroll para cargar */
   .form-grid, .form-grid.three-col, .form-grid.two-col-form { grid-template-columns: repeat(2, 1fr); gap: 8px 10px; }
-  .filter-grid { grid-template-columns: repeat(2, 1fr); gap: 8px 10px; }
+  .filter-grid .field { flex-basis: 128px; min-width: 128px; }
   .budget-amounts, .debt-amounts { grid-template-columns: repeat(2, 1fr); }
   .table-wrap { display: none; }
   .cards-mobile { display: flex; }
@@ -362,7 +373,7 @@ body {
   .app-shell { padding: 8px; }
   .card { padding: 12px; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
-  .filter-grid { grid-template-columns: 1fr 1fr; }
+  .filter-grid .field { flex-basis: 118px; min-width: 118px; }
   .mov-card-amounts { grid-template-columns: repeat(2, 1fr); }
   .mov-card { padding: 10px; gap: 6px; }
   .mov-card-amounts { font-size: 0.76rem; }

@@ -298,11 +298,53 @@ function MoneyInput({ value, onChange, placeholder = "0", className = "" }) {
     />
   );
 }
+// Reemplaza el <select> nativo por una lista propia. En mobile, el <select> nativo abre un picker
+// del sistema operativo con letra enorme que tapa toda la pantalla y no se puede achicar con CSS
+// (no es parte de la página) — acá el desplegable es un <div> más, con nuestra propia letra chica
+// y con scroll interno, así una lista larga (subcategorías, por ejemplo) no tapa nada.
 function Select({ value, onChange, children, disabled = false, className = "" }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    function handler(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+  const options = React.Children.toArray(children).filter((c) => c && c.props).map((c) => ({ value: c.props.value, label: c.props.children }));
+  const current = options.find((o) => String(o.value) === String(value ?? ""));
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} className={`control ${className}`}>
-      {children}
-    </select>
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        type="button" disabled={disabled} onClick={() => setOpen((o) => !o)}
+        className={`control ${className}`}
+        style={{ textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, cursor: disabled ? "default" : "pointer" }}
+      >
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{current ? current.label : ""}</span>
+        <span style={{ opacity: 0.55, fontSize: "0.7em", flexShrink: 0 }}>▾</span>
+      </button>
+      {open && !disabled && (
+        <div style={{
+          position: "absolute", top: "100%", left: 0, right: 0, zIndex: 300,
+          background: "var(--surface-2)", border: "1.5px solid var(--border)", borderRadius: 10,
+          boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: 260, overflowY: "auto", marginTop: 2,
+        }}>
+          {options.map((o) => (
+            <div
+              key={String(o.value)}
+              onMouseDown={() => { onChange(o.value); setOpen(false); }}
+              style={{
+                padding: "9px 14px", cursor: "pointer", fontSize: "0.85rem",
+                background: String(o.value) === String(value ?? "") ? "var(--primary-light)" : "transparent",
+                color: String(o.value) === String(value ?? "") ? "var(--primary)" : "var(--text)",
+                fontWeight: String(o.value) === String(value ?? "") ? 700 : 400,
+              }}
+            >
+              {o.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 function Badge({ children, color = "blue" }) {
@@ -541,7 +583,7 @@ export default function App() {
   const [transferForm, setTransferForm] = useState({ date: today(), person: "Federico", fromType: "Ahorro", fromCategory: "", toType: "Inversión", toCategory: "", originalAmount: "", currency: "ARS", description: "" });
   const [debtForm, setDebtForm] = useState({ name: "", owner: "Federico", balance: "", installment: "", dueDay: "", priority: "Media", rate: "", notes: "" });
   const [goalForm, setGoalForm] = useState({ name: categoryMap["Ahorro"]?.[0] || "", owner: "Federico", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
-  const [budgetForm, setBudgetForm] = useState({ month: currentMonth(), person: "Federico", type: "Egreso", category: "Supermercado", planned: "" });
+  const [budgetForm, setBudgetForm] = useState({ month: currentMonth(), person: "Federico", type: "Egreso", category: "Supermercado", planned: "", shared: false, sharedPeople: [] });
   const [editingBudgetId, setEditingBudgetId] = useState(null);
   const [editBudgetData, setEditBudgetData] = useState({ person: "", type: "", category: "", planned: "" });
   const [debtPayForm, setDebtPayForm] = useState({ debtId: "", date: today(), amount: "", person: "Federico", notes: "" });
@@ -1248,7 +1290,10 @@ export default function App() {
   }
 
   async function addBudget() {
-    if (!budgetForm.month || !budgetForm.person || !budgetForm.type || !budgetForm.category || !budgetForm.planned) return;
+    const isShared = budgetForm.shared && budgetForm.sharedPeople.length >= 2;
+    if (!budgetForm.month || !budgetForm.type || !budgetForm.category || !budgetForm.planned) return;
+    if (!isShared && !budgetForm.person) return;
+    if (isShared) { await addSharedBudget(); return; }
     const duplicate = budgets.find((b) =>
       b.month === budgetForm.month && b.person === budgetForm.person &&
       b.type === budgetForm.type && b.category === budgetForm.category
@@ -1265,6 +1310,31 @@ export default function App() {
     if (data) setBudgets((prev) => [{ id: data.id, month: data.budget_month, person: data.person, type: data.type, category: data.category, planned: data.planned_amount_ars }, ...prev]);
     // Mantiene mes/persona/tipo (conviene para cargar varias líneas seguidas), pero limpia
     // categoría e importe -- si no, quedaba "pegada" la última categoría cargada.
+    setBudgetForm((f) => ({ ...f, category: "", planned: "" }));
+  }
+
+  // Presupuesto compartido: reparte el importe total en partes iguales entre las personas
+  // elegidas, una línea de `budgets` por persona -- igual que un gasto compartido real en Cargar.
+  async function addSharedBudget() {
+    const total = Number(budgetForm.planned);
+    const peopleList = budgetForm.sharedPeople;
+    const n = peopleList.length;
+    if (!total || n < 2) return;
+    const share = Math.round((total / n) * 100) / 100;
+    const existing = budgets.filter((b) => b.month === budgetForm.month && b.type === budgetForm.type && b.category === budgetForm.category);
+    const alreadyCovered = peopleList.filter((p) => existing.some((b) => b.person === p));
+    if (alreadyCovered.length) {
+      setCopyBudgetMsg(`⚠️ Ya existe "${budgetForm.category}" para ${alreadyCovered.join(", ")} en ${budgetForm.month}. Eliminá esas líneas primero.`);
+      setTimeout(() => setCopyBudgetMsg(""), 5000);
+      return;
+    }
+    const rows = peopleList.map((person, i) => ({
+      budget_month: budgetForm.month, person, type: budgetForm.type, category: budgetForm.category,
+      planned_amount_ars: i === n - 1 ? Math.round((total - share * (n - 1)) * 100) / 100 : share,
+    }));
+    const { data, error } = await supabase.from("budgets").insert(rows).select();
+    if (error) { console.error(error); return; }
+    if (data) setBudgets((prev) => [...data.map((d) => ({ id: d.id, month: d.budget_month, person: d.person, type: d.type, category: d.category, planned: d.planned_amount_ars })), ...prev]);
     setBudgetForm((f) => ({ ...f, category: "", planned: "" }));
   }
   async function deleteBudget(id) {
@@ -2096,10 +2166,14 @@ export default function App() {
                         {s.subcategory_id && subcategoryNameById[s.subcategory_id] ? ` · ${subcategoryNameById[s.subcategory_id]}` : ""}
                       </span>
                       <div className="muted small" style={{ marginTop: 2 }}>
-                        {s.person} · {money(s.installment_amount, s.currency)}{s.kind === "tarjeta_cuotas" ? ` · cuota ${Math.max(0, (s.installments_total || 0) - pending)}/${s.installments_total} · ${cardNameById[s.card_id] || "tarjeta"}` : ` · día ${s.day_of_month}`} · {s.start_date} → {s.end_date}
+                        {s.person} · {money(s.installment_amount, s.currency)}{s.kind === "tarjeta_cuotas" ? ` · cuota ${Math.max(0, (s.installments_total || 0) - pending)}/${s.installments_total} · ${cardNameById[s.card_id] || "tarjeta"}` : ` · día ${s.day_of_month}`} · desde {s.start_date}
                       </div>
                     </div>
+                    {/* "Hasta cuándo" con los controles para cambiarlo/cortarlo, todo a la misma
+                        altura -- antes el detalle terminaba en una fecha fija de texto y las
+                        acciones para cambiarla quedaban en una fila aparte, abajo. */}
                     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <span className="muted small">hasta</span>
                       <Input type="date" value={seriesEndDateInputs[s.id] || s.end_date} onChange={(e) => setSeriesEndDateInputs((p) => ({ ...p, [s.id]: e.target.value }))} />
                       <Btn small variant="outline" onClick={() => truncateSeries(s, seriesEndDateInputs[s.id] || s.end_date)}>Definir fin</Btn>
                       <button className="del-btn" onClick={() => deleteSeries(s)}>🗑</button>
@@ -2463,12 +2537,43 @@ export default function App() {
               </div>
               <div className="form-grid">
                 <Field label="Mes"><Input type="month" value={budgetForm.month} onChange={(e) => setBudgetForm({ ...budgetForm, month: e.target.value })} /></Field>
-                <Field label="Persona"><Select value={budgetForm.person} onChange={(v) => setBudgetForm({ ...budgetForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                <Field label="Persona">
+                  {budgetForm.shared
+                    ? <div className="control" style={{ display: "flex", alignItems: "center", color: "var(--muted)" }}>Se reparte abajo 👇</div>
+                    : <Select value={budgetForm.person} onChange={(v) => setBudgetForm({ ...budgetForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select>}
+                </Field>
+                <Field label="¿Es compartido?">
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, height: "100%" }}>
+                    <input type="checkbox" checked={budgetForm.shared} onChange={(e) => setBudgetForm({ ...budgetForm, shared: e.target.checked, sharedPeople: e.target.checked ? [...people] : [] })} />
+                    Repartir entre varias personas
+                  </label>
+                </Field>
+                {budgetForm.shared && (
+                  <Field label="Repartir entre">
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", height: "100%" }}>
+                      {people.map((p) => (
+                        <label key={p} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "0.85rem" }}>
+                          <input
+                            type="checkbox" checked={budgetForm.sharedPeople.includes(p)}
+                            onChange={(e) => setBudgetForm((f) => ({ ...f, sharedPeople: e.target.checked ? [...f.sharedPeople, p] : f.sharedPeople.filter((x) => x !== p) }))}
+                          />
+                          {p}
+                        </label>
+                      ))}
+                    </div>
+                  </Field>
+                )}
                 <Field label="Tipo"><Select value={budgetForm.type} onChange={(v) => setBudgetForm({ ...budgetForm, type: v, category: (categoryMap[v] || [])[0] || "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
                 <Field label="Categoría"><Select value={budgetForm.category} onChange={(v) => setBudgetForm({ ...budgetForm, category: v })}><option value="">Elegir…</option>{(categoryMap[budgetForm.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
                 <Field label="Importe presupuestado"><MoneyInput value={budgetForm.planned} onChange={(e) => setBudgetForm({ ...budgetForm, planned: e.target.value })} placeholder="0" /></Field>
               </div>
-              {budgetAvgSuggestion !== null && (
+              {budgetForm.shared && budgetForm.sharedPeople.length >= 2 && budgetForm.planned && (
+                <InfoBox color="blue">Se reparte en partes iguales entre <strong>{budgetForm.sharedPeople.join(", ")}</strong>: <strong>{fmtArs(Number(budgetForm.planned) / budgetForm.sharedPeople.length)}</strong> cada uno.</InfoBox>
+              )}
+              {budgetForm.shared && budgetForm.sharedPeople.length < 2 && (
+                <InfoBox color="amber">Elegí al menos 2 personas para repartir el presupuesto.</InfoBox>
+              )}
+              {!budgetForm.shared && budgetAvgSuggestion !== null && (
                 <InfoBox color="blue">
                   Promedio real de {budgetAvgSuggestion.months === 1 ? "el último mes" : `los últimos ${budgetAvgSuggestion.months} meses`} para <strong>{budgetForm.category}</strong> · {budgetForm.person}: <strong>{fmtArs(budgetAvgSuggestion.value)}</strong> ·{" "}
                   <button
@@ -2477,7 +2582,9 @@ export default function App() {
                   >Usar este valor</button>
                 </InfoBox>
               )}
-              <div style={{ marginTop: 12 }}><Btn onClick={addBudget} disabled={!budgetForm.category || !budgetForm.planned}>＋ Agregar línea</Btn></div>
+              <div style={{ marginTop: 12 }}>
+                <Btn onClick={addBudget} disabled={!budgetForm.category || !budgetForm.planned || (budgetForm.shared && budgetForm.sharedPeople.length < 2) || (!budgetForm.shared && !budgetForm.person)}>＋ Agregar línea</Btn>
+              </div>
             </Card>
 
             {expectedLoanCollectionsByMonth.length > 0 && (
