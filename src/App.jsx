@@ -347,8 +347,8 @@ function Select({ value, onChange, children, disabled = false, className = "" })
     </div>
   );
 }
-function Badge({ children, color = "blue" }) {
-  return <span className={`badge badge-${color}`}>{children}</span>;
+function Badge({ children, color = "blue", style }) {
+  return <span className={`badge badge-${color}`} style={style}>{children}</span>;
 }
 function Progress({ value }) {
   const pct = Math.min(100, Math.max(0, value));
@@ -1931,27 +1931,15 @@ export default function App() {
                 <option value="USD">USD</option>
               </Select>
             </Field>
-            {tab === "datos" && (
-              <>
-                <Field label="Desde"><Input type="date" value={filters.dateFrom} onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })} /></Field>
-                <Field label="Hasta"><Input type="date" value={filters.dateTo} onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })} /></Field>
-                <Field label="Tipo"><Select value={filters.type} onChange={(v) => setFilters({ ...filters, type: v })}><option value="all">Todos</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                <Field label="Categoría"><Select value={filters.category} onChange={(v) => setFilters({ ...filters, category: v, subcategoryId: "all" })}><option value="all">Todas</option>{[...new Set(Object.values(categoryMap).flat())].map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
-                <Field label="Subcategoría">
-                  <Select value={filters.subcategoryId} onChange={(v) => setFilters({ ...filters, subcategoryId: v })}>
-                    <option value="all">Todas</option>
-                    {subcategoryRows
-                      .filter((s) => filters.category === "all" || categoryRows.find((c) => c.id === s.category_id)?.name === filters.category)
-                      .map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
-                  </Select>
-                </Field>
-                {/* Categoría + Subcategoría + Buscar van juntas (las tres apuntan a "qué es" el
-                    movimiento); F/V es un filtro aparte, se corre al final. */}
-                <Field label="Buscar"><Input value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} placeholder="Ej. Dany" /></Field>
-                <Field label="F/V"><Select value={filters.fv} onChange={(v) => setFilters({ ...filters, fv: v })}><option value="all">Todos</option><option value="F">Fijos</option><option value="V">Variables</option></Select></Field>
-              </>
-            )}
           </div>
+          {/* Buscar: fila propia, aparte del filtro general, y solo en Datos. Fecha se maneja con
+              "Mes global" (arriba) — no hace falta un Desde/Hasta aparte. F/V se sacó (no se usaba).
+              Tipo/Categoría/Subcategoría se filtran desde la tabla/tarjetas de abajo, no acá. */}
+          {tab === "datos" && (
+            <div className="filter-grid" style={{ marginTop: 10 }}>
+              <Field label="Buscar"><Input value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} placeholder="Cualquier palabra…" /></Field>
+            </div>
+          )}
         </Card>
 
         <div className="tabs-scroll">
@@ -2359,6 +2347,22 @@ export default function App() {
               <Btn onClick={() => exportSection("desviaciones")} variant="outline" small>⬇ Exportar desviaciones</Btn>
               <span className="muted small">{filteredMovements.length} registros</span>
             </div>
+            {/* Filtro de qué es el movimiento, pegado a la lista (no en el filtro general de
+                arriba) -- Tipo/Categoría/Subcategoría, 3 por fila. */}
+            <Card>
+              <div className="form-grid three-col">
+                <Field label="Tipo"><Select value={filters.type} onChange={(v) => setFilters({ ...filters, type: v })}><option value="all">Todos</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
+                <Field label="Categoría"><Select value={filters.category} onChange={(v) => setFilters({ ...filters, category: v, subcategoryId: "all" })}><option value="all">Todas</option>{[...new Set(Object.values(categoryMap).flat())].map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+                <Field label="Subcategoría">
+                  <Select value={filters.subcategoryId} onChange={(v) => setFilters({ ...filters, subcategoryId: v })}>
+                    <option value="all">Todas</option>
+                    {subcategoryRows
+                      .filter((s) => filters.category === "all" || categoryRows.find((c) => c.id === s.category_id)?.name === filters.category)
+                      .map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+                  </Select>
+                </Field>
+              </div>
+            </Card>
             <Card>
               <div className="table-wrap">
                 <table className="data-table">
@@ -2762,26 +2766,25 @@ export default function App() {
                         const actualPct  = Math.min((b.actual / maxVal) * 100, 100);
                         const diff = isExp ? b.planned - b.actual : b.actual - b.planned;
                         const diffColor = diff >= 0 ? "#34d399" : "#f87171";
+                        // Compacto: la categoría, la barra y el % van todos en la misma línea (antes
+                        // la barra quedaba en una línea aparte, abajo del título); la segunda línea
+                        // es solo los números (real/presupuesto/diferencia).
                         return (
-                          <div key={b.category} className="budget-inline-row">
-                            <div className="budget-inline-left">
-                              <span className="budget-inline-cat">{b.category}</span>
-                            </div>
-                            <div className="budget-inline-bar-wrap">
-                              <div style={{ position: "relative", height: 8, borderRadius: 999, background: "var(--border)" }}>
+                          <div key={b.category} style={{ padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <span className="budget-inline-cat" style={{ flexShrink: 0, maxWidth: "42%" }}>{b.category}</span>
+                              <div style={{ flex: 1, position: "relative", height: 6, borderRadius: 999, background: "var(--border)" }}>
                                 <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${plannedPct}%`, background: "var(--muted)", borderRadius: 999 }} />
                                 <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${actualPct}%`, background: barColor, borderRadius: 999, opacity: 0.9 }} />
                                 {b.actual > b.planned && (
-                                  <div style={{ position: "absolute", left: `${plannedPct}%`, top: -2, height: 12, width: `${Math.min(((b.actual - b.planned) / maxVal) * 100, 100 - plannedPct)}%`, background: "#f87171", borderRadius: "0 999px 999px 0", opacity: 0.75 }} />
+                                  <div style={{ position: "absolute", left: `${plannedPct}%`, top: -1, height: 8, width: `${Math.min(((b.actual - b.planned) / maxVal) * 100, 100 - plannedPct)}%`, background: "#f87171", borderRadius: "0 999px 999px 0", opacity: 0.75 }} />
                                 )}
                               </div>
-                              <div className="budget-inline-nums" style={{ marginTop: 4 }}>
-                                <span className="muted small">Real: <strong>{fmt(cv(b.actual))}</strong> / Presup.: {fmt(cv(b.planned))}</span>
-                                <span style={{ fontSize: "0.8rem", fontWeight: 700, color: diffColor }}>{diff >= 0 ? "+" : ""}{fmt(cv(diff))}</span>
-                              </div>
+                              <Badge color={badgeColor} style={{ flexShrink: 0 }}>{execution.toFixed(0)}%</Badge>
                             </div>
-                            <div className="budget-inline-right">
-                              <Badge color={badgeColor}>{execution.toFixed(0)}%</Badge>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 3 }}>
+                              <span className="muted small">Real: <strong style={{ color: "var(--text)" }}>{fmt(cv(b.actual))}</strong> / Presup.: {fmt(cv(b.planned))}</span>
+                              <span style={{ fontSize: "0.8rem", fontWeight: 700, color: diffColor, flexShrink: 0 }}>{diff >= 0 ? "+" : ""}{fmt(cv(diff))}</span>
                             </div>
                           </div>
                         );

@@ -118,7 +118,11 @@ body {
   display: flex; flex-wrap: nowrap; gap: 10px; overflow-x: auto; -webkit-overflow-scrolling: touch;
   padding-bottom: 4px;
 }
-.filter-grid .field { flex: 0 0 148px; min-width: 148px; }
+/* auto (no basis fija): un <input type="month"/"date"> nativo tiene un ancho mínimo propio (~200px
+   con el ícono de calendario) que no se puede achicar por CSS -- forzarle una caja más chica no lo
+   achica, hace que se desborde y se pise con el campo de al lado. Cada campo mide lo que
+   necesita; min-width solo evita que los <select> cortos queden demasiado angostos. */
+.filter-grid .field { flex: 0 0 auto; min-width: 110px; }
 
 /* ── Buttons ── */
 .btn {
@@ -348,8 +352,11 @@ body {
   .debt-cards { grid-template-columns: 1fr; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   /* Dos celdas por línea en vez de una sola — reduce mucho el scroll para cargar */
-  .form-grid, .form-grid.three-col, .form-grid.two-col-form { grid-template-columns: repeat(2, 1fr); gap: 8px 10px; }
-  .filter-grid .field { flex-basis: 128px; min-width: 128px; }
+  .form-grid, .form-grid.two-col-form { grid-template-columns: repeat(2, 1fr); gap: 8px 10px; }
+  /* three-col se mantiene en 3 columnas incluso en mobile a pedido explícito (ej. filtro
+     Tipo/Categoría/Subcategoría de Datos) — son selects cortos, entran bien 3 por fila. */
+  .form-grid.three-col { gap: 6px; }
+  .filter-grid .field { min-width: 100px; }
   .budget-amounts, .debt-amounts { grid-template-columns: repeat(2, 1fr); }
   .table-wrap { display: none; }
   .cards-mobile { display: flex; }
@@ -373,7 +380,7 @@ body {
   .app-shell { padding: 8px; }
   .card { padding: 12px; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
-  .filter-grid .field { flex-basis: 118px; min-width: 118px; }
+  .filter-grid .field { min-width: 92px; }
   .mov-card-amounts { grid-template-columns: repeat(2, 1fr); }
   .mov-card { padding: 10px; gap: 6px; }
   .mov-card-amounts { font-size: 0.76rem; }
