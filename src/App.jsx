@@ -67,10 +67,14 @@ const daysInMonth = (year, month) => new Date(year, month, 0).getDate(); // mont
 // Genera `count` fechas mensuales consecutivas a partir del mes de startDate, ancladas al día dayOfMonth
 // (recortado al último día válido de cada mes, ej. día 31 en febrero -> 28).
 function generateSeriesDates(startDate, dayOfMonth, count) {
-  const [sy, sm] = startDate.split("-").map(Number);
+  const [sy, sm, sd] = startDate.split("-").map(Number);
+  // Si el día de vencimiento elegido ya pasó dentro del mes de la fecha de alta (ej. hoy 23 con
+  // vencimiento el día 10), no tiene sentido que la primera cuota caiga en el pasado — arranca al
+  // mes siguiente. Si todavía no pasó (o es el mismo día), la primera cuota es ese mismo mes.
+  const startOffset = dayOfMonth < sd ? 1 : 0;
   const dates = [];
   for (let i = 0; i < count; i++) {
-    const total = (sm - 1) + i;
+    const total = (sm - 1) + startOffset + i;
     const y = sy + Math.floor(total / 12);
     const m = (total % 12) + 1;
     const day = Math.min(dayOfMonth, daysInMonth(y, m));
