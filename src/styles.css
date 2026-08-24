@@ -306,24 +306,45 @@ body {
 }
 
 @media (max-width: 780px) {
-  .app-title { font-size: 1.6rem; }
-  .app-title-icon { width: 34px; height: 34px; border-radius: 10px; font-size: 1.1rem; }
+  body { font-size: 14px; }
+  .app-shell { padding: 12px; }
+  .app-title { font-size: 1.4rem; }
+  .app-title-icon { width: 32px; height: 32px; border-radius: 10px; font-size: 1.05rem; }
+  .app-subtitle { font-size: 0.8rem; }
   .two-col { grid-template-columns: 1fr; }
   .debt-cards { grid-template-columns: 1fr; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
-  .form-grid, .form-grid.three-col, .form-grid.two-col-form { grid-template-columns: 1fr; }
-  .filter-grid { grid-template-columns: repeat(2, 1fr); }
+  /* Dos celdas por línea en vez de una sola — reduce mucho el scroll para cargar */
+  .form-grid, .form-grid.three-col, .form-grid.two-col-form { grid-template-columns: repeat(2, 1fr); gap: 8px 10px; }
+  .filter-grid { grid-template-columns: repeat(2, 1fr); gap: 8px 10px; }
   .budget-amounts, .debt-amounts { grid-template-columns: repeat(2, 1fr); }
   .table-wrap { display: none; }
   .cards-mobile { display: flex; }
+  /* Todo un poco más chico y compacto: menos padding, letra más chica, sin perder legibilidad */
+  .card { padding: 14px; border-radius: 12px; }
+  .card-head { margin-bottom: 10px; gap: 8px; }
+  .card-title { font-size: 1rem; }
+  .card-icon { font-size: 1.05rem; }
+  .control { padding: 8px 10px; font-size: 0.88rem; }
+  .field { gap: 3px; }
+  .field-label { font-size: 0.72rem; }
+  .btn { padding: 9px 16px; font-size: 0.88rem; }
+  .tab-btn { padding: 7px 13px; font-size: 0.82rem; }
+  .tab-content { gap: 10px; }
+  .app-container { gap: 10px; }
+  .mov-card { padding: 11px; gap: 7px; }
+  .mov-card-amounts { font-size: 0.78rem; }
 }
 
 @media (max-width: 480px) {
-  .app-shell { padding: 10px; }
-  .card { padding: 14px; }
+  .app-shell { padding: 8px; }
+  .card { padding: 12px; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .filter-grid { grid-template-columns: 1fr 1fr; }
   .mov-card-amounts { grid-template-columns: repeat(2, 1fr); }
+  .mov-card { padding: 10px; gap: 6px; }
+  .mov-card-amounts { font-size: 0.76rem; }
+  .del-btn { padding: 4px 7px; font-size: 0.88rem; }
 }
 
 /* Agregar al final de styles.css */
@@ -353,29 +374,29 @@ body {
 }
 .budget-inline-row {
   display: grid;
-  grid-template-columns: 180px 1fr auto;
+  grid-template-columns: 150px 1fr auto;
   align-items: center;
-  gap: 12px;
-  padding: 8px 0;
+  gap: 10px;
+  padding: 5px 0;
   border-bottom: 1px solid var(--border);
 }
 .budget-inline-row:last-child { border-bottom: none; }
 .budget-inline-left {
-  display: flex; flex-direction: column; gap: 2px; min-width: 0;
+  display: flex; flex-direction: column; gap: 1px; min-width: 0;
 }
 .budget-inline-cat {
-  font-weight: 700; font-size: 0.92rem; white-space: nowrap;
+  font-weight: 700; font-size: 0.84rem; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis;
 }
-.budget-inline-bar-wrap { display: flex; flex-direction: column; gap: 4px; }
+.budget-inline-bar-wrap { display: flex; flex-direction: column; gap: 2px; }
 .budget-inline-bar-track {
-  height: 8px; border-radius: 999px; background: var(--border); overflow: hidden;
+  height: 5px; border-radius: 999px; background: var(--border); overflow: hidden;
 }
 .budget-inline-bar-fill {
   height: 100%; border-radius: 999px; transition: width .3s ease;
 }
 .budget-inline-nums {
-  display: flex; justify-content: space-between; gap: 8px;
+  display: flex; justify-content: space-between; gap: 8px; font-size: 0.8rem;
 }
 .budget-inline-right {
   display: flex; align-items: center; gap: 6px; white-space: nowrap;

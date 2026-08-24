@@ -34,11 +34,13 @@ const DEFAULT_CATEGORY_ROWS = [
 
 const PALETTE = ["#38bdf8", "#34d399", "#fbbf24", "#f87171", "#b39ffb", "#22d3ee", "#fb923c", "#f472b6"];
 
+// Nunca mostrar decimales, ni en ARS ni en USD — no aportan nada útil acá y ocupan lugar,
+// sobre todo en mobile.
 const money = (n, cur = "ARS") =>
   new Intl.NumberFormat("es-AR", {
     style: "currency",
     currency: cur,
-    maximumFractionDigits: cur === "USD" ? 2 : 0,
+    maximumFractionDigits: 0,
   }).format(Number(n || 0));
 
 // OJO: no usar toISOString() acá — convierte a UTC, y Argentina está 3 horas atrás. Cerca de
@@ -278,6 +280,24 @@ function Input({ type = "text", value, onChange, placeholder, min, max, step, cl
     <input type={type} value={value} onChange={onChange} placeholder={placeholder} min={min} max={max} step={step} className={`control ${className}`} />
   );
 }
+// Input de importes en pesos/dólares: separador de miles en vivo mientras se tipea, nunca
+// decimales (nadie carga centavos acá). Mismo contrato hacia afuera que <Input> — onChange recibe
+// un evento con target.value = el número crudo sin puntos — para poder reemplazar <Input
+// type="number"> sin tocar nada del lado del que la usa.
+function MoneyInput({ value, onChange, placeholder = "0", className = "" }) {
+  const digits = value == null ? "" : String(value).replace(/\D/g, "");
+  const display = digits ? Number(digits).toLocaleString("es-AR") : "";
+  function handleChange(e) {
+    const raw = e.target.value.replace(/\D/g, "");
+    onChange({ target: { value: raw } });
+  }
+  return (
+    <input
+      type="text" inputMode="numeric" value={display} onChange={handleChange}
+      placeholder={placeholder} className={`control ${className}`}
+    />
+  );
+}
 function Select({ value, onChange, children, disabled = false, className = "" }) {
   return (
     <select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} className={`control ${className}`}>
@@ -434,7 +454,7 @@ function MovementEditPanel({ data, onChange, types, categoryMap, subcategoryMap,
       </Field>
       <Field label="Detalle"><Input value={data.description} onChange={(e) => onChange({ ...data, description: e.target.value })} /></Field>
       <Field label="Moneda"><Select value={data.currency} onChange={(v) => onChange({ ...data, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
-      <Field label="Importe"><Input type="number" value={data.originalAmount} onChange={(e) => onChange({ ...data, originalAmount: e.target.value })} /></Field>
+      <Field label="Importe"><MoneyInput value={data.originalAmount} onChange={(e) => onChange({ ...data, originalAmount: e.target.value })} /></Field>
       <Field label="Medio de pago">
         <Select value={data.paymentMethod} onChange={(v) => onChange({ ...data, paymentMethod: v, cardId: v === "Tarjeta" ? data.cardId : "" })}>
           <option value="">Sin especificar</option>
@@ -510,7 +530,9 @@ export default function App() {
   const [expandedCats, setExpandedCats] = useState({});
 
   const emptyMovForm = useCallback(() => ({
-    date: today(), person: "Federico", type: "", category: "", subcategoryId: "", description: "", originalAmount: "", currency: "ARS",
+    // Persona arranca vacía a propósito: mejor obligar a elegir siempre que quedar prefijado en
+    // Federico, donde por las apuradas se puede cargar algo de otra persona sin darse cuenta.
+    date: today(), person: "", type: "", category: "", subcategoryId: "", description: "", originalAmount: "", currency: "ARS",
     fxRate: blueRate, linkedDebtId: "", linkedGoalId: "", paymentMethod: "Efectivo", cardId: "", installments: "1",
     shared: false, sharedPeople: [],
   }), [blueRate]);
@@ -713,7 +735,9 @@ export default function App() {
   const fmtArs = useCallback((value) => money(value, "ARS"), []);
 
   async function addMovement() {
-    if (!movForm.category || !movForm.originalAmount || !movForm.person || !movForm.type) return;
+    // Si es compartido la persona no se elige acá (se reparte entre "sharedPeople" más abajo), así
+    // que no se exige movForm.person en ese caso.
+    if (!movForm.category || !movForm.originalAmount || !movForm.type || (!movForm.shared && !movForm.person)) return;
     setSaving(true);
 
     const isShared = movForm.shared && movForm.sharedPeople.length >= 2;
@@ -1857,7 +1881,7 @@ export default function App() {
                 <Field label="Persona">
                   {movForm.shared
                     ? <div className="control" style={{ display: "flex", alignItems: "center", color: "var(--muted)" }}>Se reparte abajo 👇</div>
-                    : <Select value={movForm.person} onChange={(v) => setMovForm({ ...movForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select>}
+                    : <Select value={movForm.person} onChange={(v) => setMovForm({ ...movForm, person: v })}><option value="">Elegir…</option>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select>}
                 </Field>
                 <Field label="¿Es compartido?">
                   <label style={{ display: "flex", alignItems: "center", gap: 6, height: "100%" }}>
@@ -1908,7 +1932,7 @@ export default function App() {
                 )}
 
                 <Field label="Moneda"><Select value={movForm.currency} onChange={(v) => setMovForm({ ...movForm, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
-                <Field label={movForm.paymentMethod === "Tarjeta" && Number(movForm.installments) > 1 ? "Importe total de la compra" : `Importe${movForm.currency === "USD" ? " (USD)" : " (ARS)"}`}><Input type="number" value={movForm.originalAmount} onChange={(e) => setMovForm({ ...movForm, originalAmount: e.target.value })} placeholder="0" /></Field>
+                <Field label={movForm.paymentMethod === "Tarjeta" && Number(movForm.installments) > 1 ? "Importe total de la compra" : `Importe${movForm.currency === "USD" ? " (USD)" : " (ARS)"}`}><MoneyInput value={movForm.originalAmount} onChange={(e) => setMovForm({ ...movForm, originalAmount: e.target.value })} placeholder="0" /></Field>
               </div>
               {selectedDebtForMov && movForm.category === "Deuda" && <InfoBox color="blue">Cuota sugerida: <strong>{fmtArs(selectedDebtForMov.installment)}</strong> · Saldo pendiente: <strong>{fmtArs(selectedDebtForMov.balance)}</strong>.</InfoBox>}
               {movForm.currency === "USD" && <InfoBox color="amber">Cotización blue del momento: <strong>{money(blueRate)}</strong> por USD · Importe en ARS: <strong>{money(toArs(movForm.originalAmount || 0, "USD", blueRate))}</strong></InfoBox>}
@@ -1936,7 +1960,7 @@ export default function App() {
                 const hasBudget = budgets.some((b) => b.month === monthMov && b.person === movForm.person && b.type === movForm.type && b.category === movForm.category);
                 return !hasBudget ? <InfoBox color="amber">⚠️ No hay presupuesto cargado para <strong>{movForm.category}</strong> · {movForm.person} en {monthMov}. Podés cargarlo en la pestaña Presupuesto.</InfoBox> : null;
               })()}
-              <div style={{ marginTop: 16 }}><Btn onClick={addMovement} disabled={saving || !movForm.type || !movForm.category || !movForm.originalAmount || (movForm.shared && movForm.sharedPeople.length < 2)}>{saving ? "Guardando…" : "＋ Agregar movimiento"}</Btn></div>
+              <div style={{ marginTop: 16 }}><Btn onClick={addMovement} disabled={saving || !movForm.type || !movForm.category || !movForm.originalAmount || (!movForm.shared && !movForm.person) || (movForm.shared && movForm.sharedPeople.length < 2)}>{saving ? "Guardando…" : "＋ Agregar movimiento"}</Btn></div>
             </Card>
 
             <Card>
@@ -1951,7 +1975,7 @@ export default function App() {
                 <Field label="A"><Select value={transferForm.toType} onChange={(v) => setTransferForm({ ...transferForm, toType: v, toCategory: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
                 <Field label="Categoría"><Select value={transferForm.toCategory} onChange={(v) => setTransferForm({ ...transferForm, toCategory: v })}><option value="">Seleccionar…</option>{(categoryMap[transferForm.toType] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
                 <Field label="Moneda"><Select value={transferForm.currency} onChange={(v) => setTransferForm({ ...transferForm, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
-                <Field label={`Importe (${transferForm.currency})`}><Input type="number" value={transferForm.originalAmount} onChange={(e) => setTransferForm({ ...transferForm, originalAmount: e.target.value })} placeholder="0" /></Field>
+                <Field label={`Importe (${transferForm.currency})`}><MoneyInput value={transferForm.originalAmount} onChange={(e) => setTransferForm({ ...transferForm, originalAmount: e.target.value })} placeholder="0" /></Field>
               </div>
               <div style={{ marginTop: 10 }}>
                 <Field label="Descripción (opcional)"><Input value={transferForm.description} onChange={(e) => setTransferForm({ ...transferForm, description: e.target.value })} placeholder={`Ej. Paso fondos de ${transferForm.fromCategory || "origen"} a ${transferForm.toCategory || "destino"}`} /></Field>
@@ -2002,7 +2026,7 @@ export default function App() {
                   </div>
                 )}
                 <div className="form-grid three-col" style={{ marginTop: 12 }}>
-                  <Field label="Importe a registrar"><Input type="number" value={loanPayForm.amount} onChange={(e) => setLoanPayForm({ ...loanPayForm, amount: e.target.value })} placeholder="0" /></Field>
+                  <Field label="Importe a registrar"><MoneyInput value={loanPayForm.amount} onChange={(e) => setLoanPayForm({ ...loanPayForm, amount: e.target.value })} placeholder="0" /></Field>
                   <Field label="Notas"><Input value={loanPayForm.notes || ""} onChange={(e) => setLoanPayForm({ ...loanPayForm, notes: e.target.value })} /></Field>
                 </div>
                 <div style={{ marginTop: 12 }}><Btn onClick={registerLoanPayment} disabled={saving || !loanPayForm.loanId || !loanPayForm.amount}>{saving ? "Guardando…" : "＋ Registrar cobro"}</Btn></div>
@@ -2028,7 +2052,7 @@ export default function App() {
                 </Field>
                 <Field label="Detalle (opcional)"><Input value={debitoForm.description} onChange={(e) => setDebitoForm({ ...debitoForm, description: e.target.value })} placeholder="Ej. Netflix, Alquiler depto" /></Field>
                 <Field label="Moneda"><Select value={debitoForm.currency} onChange={(v) => setDebitoForm({ ...debitoForm, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
-                <Field label={`Importe${debitoForm.currency === "USD" ? " (USD)" : " (ARS)"}`}><Input type="number" value={debitoForm.amount} onChange={(e) => setDebitoForm({ ...debitoForm, amount: e.target.value })} placeholder="0" /></Field>
+                <Field label={`Importe${debitoForm.currency === "USD" ? " (USD)" : " (ARS)"}`}><MoneyInput value={debitoForm.amount} onChange={(e) => setDebitoForm({ ...debitoForm, amount: e.target.value })} placeholder="0" /></Field>
                 <Field label="Día del mes"><Input type="number" min="1" max="28" value={debitoForm.dayOfMonth} onChange={(e) => setDebitoForm({ ...debitoForm, dayOfMonth: e.target.value })} /></Field>
                 <Field label="Desde"><Input type="date" value={debitoForm.startDate} onChange={(e) => setDebitoForm({ ...debitoForm, startDate: e.target.value })} /></Field>
               </div>
@@ -2076,7 +2100,7 @@ export default function App() {
                   </Select>
                 </Field>
                 <Field label="Mes"><Input type="month" value={reconcileForm.month} onChange={(e) => setReconcileForm({ ...reconcileForm, month: e.target.value })} /></Field>
-                <Field label="Total según resumen del banco"><Input type="number" value={reconcileForm.statementTotal} onChange={(e) => setReconcileForm({ ...reconcileForm, statementTotal: e.target.value })} placeholder="0" /></Field>
+                <Field label="Total según resumen del banco"><MoneyInput value={reconcileForm.statementTotal} onChange={(e) => setReconcileForm({ ...reconcileForm, statementTotal: e.target.value })} placeholder="0" /></Field>
               </div>
               {reconcileForm.cardId && (
                 <>
@@ -2370,7 +2394,7 @@ export default function App() {
                   <>
                     <div className="form-grid three-col">
                       <Field label="Mes"><Input type="month" value={balanceForm.month} onChange={(e) => setBalanceForm({ ...balanceForm, month: e.target.value })} /></Field>
-                      <Field label="Saldo inicial (ARS)"><Input type="number" value={balanceForm.opening} onChange={(e) => setBalanceForm({ ...balanceForm, opening: e.target.value })} placeholder="0" /></Field>
+                      <Field label="Saldo inicial (ARS)"><MoneyInput value={balanceForm.opening} onChange={(e) => setBalanceForm({ ...balanceForm, opening: e.target.value })} placeholder="0" /></Field>
                       <Field label="Notas"><Input value={balanceForm.notes} onChange={(e) => setBalanceForm({ ...balanceForm, notes: e.target.value })} placeholder="Opcional" /></Field>
                     </div>
                     {hasSuggestion && (
@@ -2408,7 +2432,7 @@ export default function App() {
                 <Field label="Persona"><Select value={budgetForm.person} onChange={(v) => setBudgetForm({ ...budgetForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
                 <Field label="Tipo"><Select value={budgetForm.type} onChange={(v) => setBudgetForm({ ...budgetForm, type: v, category: (categoryMap[v] || [])[0] || "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
                 <Field label="Categoría"><Select value={budgetForm.category} onChange={(v) => setBudgetForm({ ...budgetForm, category: v })}>{(categoryMap[budgetForm.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
-                <Field label="Importe presupuestado"><Input type="number" value={budgetForm.planned} onChange={(e) => setBudgetForm({ ...budgetForm, planned: e.target.value })} placeholder="0" /></Field>
+                <Field label="Importe presupuestado"><MoneyInput value={budgetForm.planned} onChange={(e) => setBudgetForm({ ...budgetForm, planned: e.target.value })} placeholder="0" /></Field>
               </div>
               {budgetAvgSuggestion !== null && (
                 <InfoBox color="blue">
@@ -2490,7 +2514,7 @@ export default function App() {
                               <Field label="Persona"><Select value={editBudgetData.person} onChange={(v) => setEditBudgetData({ ...editBudgetData, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
                               <Field label="Tipo"><Select value={editBudgetData.type} onChange={(v) => setEditBudgetData({ ...editBudgetData, type: v, category: (categoryMap[v] || [])[0] || "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
                               <Field label="Categoría"><Select value={editBudgetData.category} onChange={(v) => setEditBudgetData({ ...editBudgetData, category: v })}>{(categoryMap[editBudgetData.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
-                              <Field label="Importe presupuestado"><Input type="number" value={editBudgetData.planned} onChange={(e) => setEditBudgetData({ ...editBudgetData, planned: e.target.value })} /></Field>
+                              <Field label="Importe presupuestado"><MoneyInput value={editBudgetData.planned} onChange={(e) => setEditBudgetData({ ...editBudgetData, planned: e.target.value })} /></Field>
                               <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
                                 <Btn small onClick={() => saveEditBudget(b.id)}>✓ Guardar</Btn>
                                 <Btn small variant="outline" onClick={() => setEditingBudgetId(null)}>✕ Cancelar</Btn>
@@ -2513,7 +2537,7 @@ export default function App() {
                 <Field label="Categoría (= nombre de meta)"><Select value={goalForm.name} onChange={(v) => setGoalForm({ ...goalForm, name: v })}><option value="">Seleccionar…</option>{(categoryMap[goalForm.goalType] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
                 <Field label="Responsable"><Select value={goalForm.owner} onChange={(v) => setGoalForm({ ...goalForm, owner: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
                 <Field label="Periodicidad"><Select value={goalForm.periodType} onChange={(v) => setGoalForm({ ...goalForm, periodType: v })}><option value="Mensual">Mensual</option><option value="Anual">Anual</option></Select></Field>
-                <Field label="Objetivo (ARS)"><Input type="number" value={goalForm.target} onChange={(e) => setGoalForm({ ...goalForm, target: e.target.value })} /></Field>
+                <Field label="Objetivo (ARS)"><MoneyInput value={goalForm.target} onChange={(e) => setGoalForm({ ...goalForm, target: e.target.value })} /></Field>
                 <Field label="Notas"><Input value={goalForm.notes} onChange={(e) => setGoalForm({ ...goalForm, notes: e.target.value })} /></Field>
               </div>
               <div style={{ marginTop: 12 }}><Btn onClick={addGoal}>＋ Crear meta</Btn></div>
@@ -2752,8 +2776,8 @@ export default function App() {
                     <div className="form-grid two-col-form">
                       <Field label="Nombre"><Input value={debtForm.name} onChange={(e) => setDebtForm({ ...debtForm, name: e.target.value })} /></Field>
                       <Field label="Responsable"><Select value={debtForm.owner} onChange={(v) => setDebtForm({ ...debtForm, owner: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
-                      <Field label="Saldo actual"><Input type="number" value={debtForm.balance} onChange={(e) => setDebtForm({ ...debtForm, balance: e.target.value })} /></Field>
-                      <Field label="Cuota estimada"><Input type="number" value={debtForm.installment} onChange={(e) => setDebtForm({ ...debtForm, installment: e.target.value })} /></Field>
+                      <Field label="Saldo actual"><MoneyInput value={debtForm.balance} onChange={(e) => setDebtForm({ ...debtForm, balance: e.target.value })} /></Field>
+                      <Field label="Cuota estimada"><MoneyInput value={debtForm.installment} onChange={(e) => setDebtForm({ ...debtForm, installment: e.target.value })} /></Field>
                       <Field label="Día de vencimiento"><Input type="number" value={debtForm.dueDay} onChange={(e) => setDebtForm({ ...debtForm, dueDay: e.target.value })} /></Field>
                       <Field label="Prioridad"><Select value={debtForm.priority} onChange={(v) => setDebtForm({ ...debtForm, priority: v })}><option value="Alta">Alta</option><option value="Media">Media</option><option value="Baja">Baja</option></Select></Field>
                       <Field label="Tasa"><Input type="number" value={debtForm.rate} onChange={(e) => setDebtForm({ ...debtForm, rate: e.target.value })} /></Field>
@@ -2766,7 +2790,7 @@ export default function App() {
                     <div className="form-grid two-col-form">
                       <Field label="Deuda"><Select value={debtPayForm.debtId} onChange={(v) => setDebtPayForm({ ...debtPayForm, debtId: v })}><option value="">Elegir deuda…</option>{personDebts.map((d) => <option key={d.id} value={String(d.id)}>{d.name}</option>)}</Select></Field>
                       <Field label="Fecha"><Input type="date" value={debtPayForm.date} onChange={(e) => setDebtPayForm({ ...debtPayForm, date: e.target.value })} /></Field>
-                      <Field label="Importe"><Input type="number" value={debtPayForm.amount} onChange={(e) => setDebtPayForm({ ...debtPayForm, amount: e.target.value })} /></Field>
+                      <Field label="Importe"><MoneyInput value={debtPayForm.amount} onChange={(e) => setDebtPayForm({ ...debtPayForm, amount: e.target.value })} /></Field>
                       <Field label="Persona"><Select value={debtPayForm.person} onChange={(v) => setDebtPayForm({ ...debtPayForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
                       <Field label="Notas"><Input value={debtPayForm.notes} onChange={(e) => setDebtPayForm({ ...debtPayForm, notes: e.target.value })} /></Field>
                     </div>
@@ -2798,13 +2822,13 @@ export default function App() {
               <p className="muted small" style={{ marginBottom: 12 }}>Plata que la familia le presta a un tercero (al revés de Deudas). Al otorgarlo se descuenta el capital como Inversión · Prestamos. Completá <strong>Plazo</strong> o <strong>Cuota objetivo</strong> — no hace falta los dos. Los cobros de cuota se registran desde la solapa <strong>Cargar</strong>.</p>
               <div className="form-grid three-col">
                 <Field label="Nombre / a quién"><Input value={loanForm.name} onChange={(e) => setLoanForm({ ...loanForm, name: e.target.value })} placeholder="Ej. Ale" /></Field>
-                <Field label="Capital"><Input type="number" value={loanForm.principal} onChange={(e) => setLoanForm({ ...loanForm, principal: e.target.value })} /></Field>
+                <Field label="Capital"><MoneyInput value={loanForm.principal} onChange={(e) => setLoanForm({ ...loanForm, principal: e.target.value })} /></Field>
                 <Field label="TNA (%)"><Input type="number" value={loanForm.annualRate} onChange={(e) => setLoanForm({ ...loanForm, annualRate: e.target.value })} placeholder="Ej. 50" /></Field>
                 <Field label="Fecha de desembolso"><Input type="date" value={loanForm.startDate} onChange={(e) => setLoanForm({ ...loanForm, startDate: e.target.value })} /></Field>
                 <Field label="Día de vencimiento"><Input type="number" min="1" max="28" value={loanForm.dayOfMonth} onChange={(e) => setLoanForm({ ...loanForm, dayOfMonth: e.target.value })} /></Field>
                 <Field label="Meses de gracia"><Input type="number" min="0" value={loanForm.graceMonths} onChange={(e) => setLoanForm({ ...loanForm, graceMonths: e.target.value })} /></Field>
                 <Field label="Plazo (meses)"><Input type="number" value={loanForm.termMonths} onChange={(e) => setLoanForm({ ...loanForm, termMonths: e.target.value, targetInstallment: "" })} placeholder="Opcional" /></Field>
-                <Field label="Cuota objetivo"><Input type="number" value={loanForm.targetInstallment} onChange={(e) => setLoanForm({ ...loanForm, targetInstallment: e.target.value, termMonths: "" })} placeholder="Opcional" /></Field>
+                <Field label="Cuota objetivo"><MoneyInput value={loanForm.targetInstallment} onChange={(e) => setLoanForm({ ...loanForm, targetInstallment: e.target.value, termMonths: "" })} placeholder="Opcional" /></Field>
                 <Field label="Notas"><Input value={loanForm.notes} onChange={(e) => setLoanForm({ ...loanForm, notes: e.target.value })} /></Field>
               </div>
               <InfoBox color="blue">
@@ -2881,8 +2905,8 @@ export default function App() {
                       <div style={{ marginTop: 10, padding: 10, background: "var(--surface-2)", borderRadius: 10 }}>
                         <p className="muted small" style={{ marginBottom: 8 }}>Piden más plata sobre este préstamo. Poné cuánto más y, si querés, la cuota nueva — te muestro en cuánto quedan las cuotas antes de confirmar.</p>
                         <div className="form-grid three-col">
-                          <Field label="Importe adicional"><Input type="number" value={incForm.amount} onChange={(e) => setLoanIncreaseForm((p) => ({ ...p, [loan.id]: { ...incForm, amount: e.target.value } }))} /></Field>
-                          <Field label="Cuota nueva (opcional)"><Input type="number" value={incForm.newInstallment} onChange={(e) => setLoanIncreaseForm((p) => ({ ...p, [loan.id]: { ...incForm, newInstallment: e.target.value } }))} placeholder={fmtArs(schedule.installment)} /></Field>
+                          <Field label="Importe adicional"><MoneyInput value={incForm.amount} onChange={(e) => setLoanIncreaseForm((p) => ({ ...p, [loan.id]: { ...incForm, amount: e.target.value } }))} /></Field>
+                          <Field label="Cuota nueva (opcional)"><MoneyInput value={incForm.newInstallment} onChange={(e) => setLoanIncreaseForm((p) => ({ ...p, [loan.id]: { ...incForm, newInstallment: e.target.value } }))} placeholder={fmtArs(schedule.installment)} /></Field>
                         </div>
                         {previewIncrease && (
                           <InfoBox color="amber">
