@@ -59,18 +59,6 @@ const monthLabel = (mo) => {
   const [y, m] = mo.split("-").map(Number);
   return `${MONTH_NAMES[m - 1]} de ${y}`;
 };
-// Opciones para el selector de "Mes global": de `forward` meses en el futuro (para poder ver
-// cuotas/débitos ya generados a futuro) a `back` meses en el pasado, más reciente primero.
-function monthOptionsAround(centerMonth, back = 24, forward = 12) {
-  const [y, m] = centerMonth.split("-").map(Number);
-  const list = [];
-  for (let i = forward; i >= -back; i--) {
-    const d = new Date(y, m - 1 + i, 1);
-    list.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
-  }
-  return list;
-}
-
 const monthKey = (d) => {
   const dt = new Date(`${d}T00:00:00`);
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
@@ -329,7 +317,7 @@ function Select({ value, onChange, children, disabled = false, className = "" })
   useEffect(() => {
     function handler(e) {
       if (btnRef.current?.contains(e.target)) return;
-      if (menuRef.current?.contains(e.target)) return;
+      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return;
       setOpen(false);
     }
     document.addEventListener("mousedown", handler);
@@ -343,8 +331,14 @@ function Select({ value, onChange, children, disabled = false, className = "" })
   // position:fixed en coordenadas de viewport, así ningún contenedor lo puede recortar.
   useEffect(() => {
     if (!open) return;
-    function close() { setOpen(false); }
-    // Si se scrollea la página mientras está abierto, se cierra en vez de quedar desalineado.
+    // Ojo: el scroll DENTRO del propio menú (para ver más opciones de una lista larga) también
+    // dispara "scroll" acá, porque un listener en capture:true en window ve pasar el evento aunque
+    // no burbujee — sin este chequeo, apenas intentabas scrollear la lista se cerraba sola. Solo
+    // cierra si el scroll es de la página de atrás, no de la lista.
+    function close(e) {
+      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    }
     window.addEventListener("scroll", close, true);
     window.addEventListener("resize", close);
     return () => {
@@ -410,7 +404,7 @@ function Select({ value, onChange, children, disabled = false, className = "" })
 // "Mes global": elegir uno o varios meses (checklist), en vez de un <input type="month"> que solo
 // permite uno. Mismo mecanismo de portal que Select, por la misma razón (evitar que un ancestro con
 // scroll recorte el menú).
-function MonthMultiSelect({ value, onChange, className = "" }) {
+function MonthMultiSelect({ value, onChange, months, className = "" }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState(null);
   const btnRef = useRef(null);
@@ -419,7 +413,7 @@ function MonthMultiSelect({ value, onChange, className = "" }) {
   useEffect(() => {
     function handler(e) {
       if (btnRef.current?.contains(e.target)) return;
-      if (menuRef.current?.contains(e.target)) return;
+      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return;
       setOpen(false);
     }
     document.addEventListener("mousedown", handler);
@@ -427,7 +421,12 @@ function MonthMultiSelect({ value, onChange, className = "" }) {
   }, []);
   useEffect(() => {
     if (!open) return;
-    function close() { setOpen(false); }
+    // Igual que en Select: ignorar el scroll que pasa DENTRO del propio menú, si no nunca se
+    // puede scrollear la lista (se cierra apenas se intenta).
+    function close(e) {
+      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    }
     window.addEventListener("scroll", close, true);
     window.addEventListener("resize", close);
     return () => {
@@ -436,7 +435,12 @@ function MonthMultiSelect({ value, onChange, className = "" }) {
     };
   }, [open]);
 
-  const options = useMemo(() => monthOptionsAround(currentMonth()), []);
+  // Meses con datos reales (o el mes elegido, aunque todavía no tenga movimientos) — no un rango
+  // ciego alrededor de hoy, que mostraba meses como "agosto 2027" sin un solo movimiento cargado.
+  const options = useMemo(() => {
+    const set = new Set([...(months || []), ...value, currentMonth()]);
+    return [...set].sort().reverse();
+  }, [months, value]);
 
   function toggle() {
     if (!open && btnRef.current) {
@@ -492,6 +496,92 @@ function MonthMultiSelect({ value, onChange, className = "" }) {
               </div>
             );
           })}
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
+// Un solo mes (no varios) — usado en los formularios que necesitan elegir un mes puntual
+// (conciliación, saldo inicial, presupuesto). Reemplaza <Input type="month"> por la misma razón
+// que MonthMultiSelect: el input nativo tiene un ancho mínimo propio que no se puede achicar y
+// termina desbordando su celda en un form-grid angosto.
+function MonthSelect({ value, onChange, months, className = "" }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
+  const btnRef = useRef(null);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    function handler(e) {
+      if (btnRef.current?.contains(e.target)) return;
+      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    function close(e) {
+      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    }
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open]);
+
+  const options = useMemo(() => {
+    const set = new Set([...(months || []), value, currentMonth()]);
+    return [...set].sort().reverse();
+  }, [months, value]);
+
+  function toggle() {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      const width = Math.max(r.width, 170);
+      const left = Math.min(r.left, window.innerWidth - width - 8);
+      setPos({ top: r.bottom + 4, left: Math.max(8, left), width });
+    }
+    setOpen((o) => !o);
+  }
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        ref={btnRef} type="button" onClick={toggle} className={`control ${className}`}
+        style={{ textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, cursor: "pointer" }}
+      >
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value ? monthLabel(value) : ""}</span>
+        <span style={{ opacity: 0.55, fontSize: "0.7em", flexShrink: 0 }}>▾</span>
+      </button>
+      {open && pos && createPortal(
+        <div
+          ref={menuRef}
+          style={{
+            position: "fixed", top: pos.top, left: pos.left, width: pos.width, zIndex: 1000,
+            background: "var(--surface-2)", border: "1.5px solid var(--border)", borderRadius: 10,
+            boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: 280, overflowY: "auto",
+          }}
+        >
+          {options.map((mo) => (
+            <div
+              key={mo}
+              onMouseDown={() => { onChange(mo); setOpen(false); }}
+              style={{
+                padding: "8px 14px", cursor: "pointer", fontSize: "0.85rem",
+                background: mo === value ? "var(--primary-light)" : "transparent",
+                color: mo === value ? "var(--primary)" : "var(--text)", fontWeight: mo === value ? 700 : 400,
+              }}
+            >
+              {monthLabel(mo)}
+            </div>
+          ))}
         </div>,
         document.body
       )}
@@ -739,7 +829,9 @@ export default function App() {
   const [transferForm, setTransferForm] = useState({ date: today(), person: "Federico", fromType: "Ahorro", fromCategory: "", toType: "Inversión", toCategory: "", originalAmount: "", currency: "ARS", description: "" });
   const [debtForm, setDebtForm] = useState({ name: "", owner: "Federico", balance: "", installment: "", dueDay: "", priority: "Media", rate: "", notes: "" });
   const [goalForm, setGoalForm] = useState({ name: categoryMap["Ahorro"]?.[0] || "", owner: "Federico", goalType: "Ahorro", periodType: "Mensual", target: "", notes: "" });
-  const [budgetForm, setBudgetForm] = useState({ month: currentMonth(), person: "Federico", type: "Egreso", category: "Supermercado", planned: "", shared: false, sharedPeople: [] });
+  // Categoría vacía a propósito (no "Supermercado" fijo) — que siempre haya que elegirla,
+  // consistente con Persona en Cargar.
+  const [budgetForm, setBudgetForm] = useState({ month: currentMonth(), person: "Federico", type: "Egreso", category: "", planned: "", shared: false, sharedPeople: [] });
   const [editingBudgetId, setEditingBudgetId] = useState(null);
   const [editBudgetData, setEditBudgetData] = useState({ person: "", type: "", category: "", planned: "" });
   const [debtPayForm, setDebtPayForm] = useState({ debtId: "", date: today(), amount: "", person: "Federico", notes: "" });
@@ -1674,6 +1766,9 @@ export default function App() {
     setCards((prev) => prev.filter((c) => c.id !== row.id));
   }
 
+  // Meses con al menos un movimiento cargado (de cualquier persona) — es lo que ofrece elegir
+  // "Mes global", en vez de un rango ciego de fechas sin datos.
+  const availableMonths = useMemo(() => [...new Set(movements.map((m) => monthKey(m.date)))], [movements]);
   const personMovements = useMemo(() => movements.filter((m) => selectedPerson === "all" || m.person === selectedPerson), [movements, selectedPerson]);
   const personDebts = useMemo(() => debts.filter((d) => selectedPerson === "all" || d.owner === selectedPerson), [debts, selectedPerson]);
   // Los préstamos son plata de la familia, no de una persona — se muestran siempre todos, sin
@@ -2072,7 +2167,7 @@ export default function App() {
               </Select>
             </Field>
             <Field label="Mes global">
-              <MonthMultiSelect value={reportMonths} onChange={setReportMonths} />
+              <MonthMultiSelect value={reportMonths} onChange={setReportMonths} months={availableMonths} />
             </Field>
             <Field label="Visualización">
               <Select value={displayCurrency} onChange={setDisplayCurrency}>
@@ -2332,7 +2427,7 @@ export default function App() {
                     {cards.map((c) => <option key={c.id} value={String(c.id)}>{c.name}{c.owner ? ` · ${c.owner}` : ""}</option>)}
                   </Select>
                 </Field>
-                <Field label="Mes"><Input type="month" value={reconcileForm.month} onChange={(e) => setReconcileForm({ ...reconcileForm, month: e.target.value })} /></Field>
+                <Field label="Mes"><MonthSelect value={reconcileForm.month} onChange={(v) => setReconcileForm({ ...reconcileForm, month: v })} months={availableMonths} /></Field>
                 <Field label="Total según resumen del banco"><MoneyInput value={reconcileForm.statementTotal} onChange={(e) => setReconcileForm({ ...reconcileForm, statementTotal: e.target.value })} placeholder="0" /></Field>
               </div>
               {reconcileForm.cardId && (
@@ -2683,7 +2778,7 @@ export default function App() {
                 return (
                   <>
                     <div className="form-grid three-col">
-                      <Field label="Mes"><Input type="month" value={balanceForm.month} onChange={(e) => setBalanceForm({ ...balanceForm, month: e.target.value })} /></Field>
+                      <Field label="Mes"><MonthSelect value={balanceForm.month} onChange={(v) => setBalanceForm({ ...balanceForm, month: v })} months={availableMonths} /></Field>
                       <Field label="Saldo inicial (ARS)"><MoneyInput value={balanceForm.opening} onChange={(e) => setBalanceForm({ ...balanceForm, opening: e.target.value })} placeholder="0" /></Field>
                       <Field label="Notas"><Input value={balanceForm.notes} onChange={(e) => setBalanceForm({ ...balanceForm, notes: e.target.value })} placeholder="Opcional" /></Field>
                     </div>
@@ -2718,7 +2813,7 @@ export default function App() {
                 </div>
               </div>
               <div className="form-grid">
-                <Field label="Mes"><Input type="month" value={budgetForm.month} onChange={(e) => setBudgetForm({ ...budgetForm, month: e.target.value })} /></Field>
+                <Field label="Mes"><MonthSelect value={budgetForm.month} onChange={(v) => setBudgetForm({ ...budgetForm, month: v })} months={availableMonths} /></Field>
                 <Field label="Persona">
                   {budgetForm.shared
                     ? <div className="control" style={{ display: "flex", alignItems: "center", color: "var(--muted)" }}>Se reparte abajo 👇</div>
