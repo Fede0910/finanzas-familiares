@@ -261,6 +261,10 @@ body {
   padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle;
 }
 .data-table tr:last-child td { border-bottom: none; }
+/* Encabezados que en vez de un título fijo tienen el filtro de esa columna (Tipo/Categoría/
+   Subcategoría) -- sin mayúsculas forzadas (heredaría al texto del select) y menos padding. */
+.data-table th.th-filter { text-transform: none; padding: 4px 6px; }
+.data-table th.th-filter .control { font-size: 0.78rem; font-weight: 600; min-width: 110px; }
 .data-table tr:hover td { background: var(--surface-2); }
 .number { text-align: right; font-variant-numeric: tabular-nums; }
 
@@ -274,6 +278,10 @@ body {
 
 /* ── Movement cards (mobile) ── */
 .cards-mobile { display: none; gap: 10px; flex-direction: column; }
+/* Filtro de Tipo/Categoría/Subcategoría: en desktop vive en los encabezados de la tabla (el
+   <thead>, que se oculta entero en mobile junto con .table-wrap), así que en mobile hace falta
+   este duplicado aparte -- mismo breakpoint que .table-wrap/.cards-mobile. */
+.datos-mobile-filter { display: none; }
 .mov-card {
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 14px; display: grid; gap: 10px;
@@ -360,6 +368,7 @@ body {
   .budget-amounts, .debt-amounts { grid-template-columns: repeat(2, 1fr); }
   .table-wrap { display: none; }
   .cards-mobile { display: flex; }
+  .datos-mobile-filter { display: block; }
   /* Todo un poco más chico y compacto: menos padding, letra más chica, sin perder legibilidad */
   .card { padding: 14px; border-radius: 12px; }
   .card-head { margin-bottom: 10px; gap: 8px; }

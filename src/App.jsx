@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -52,6 +53,23 @@ const today = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 const currentMonth = () => today().slice(0, 7);
+
+const MONTH_NAMES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const monthLabel = (mo) => {
+  const [y, m] = mo.split("-").map(Number);
+  return `${MONTH_NAMES[m - 1]} de ${y}`;
+};
+// Opciones para el selector de "Mes global": de `forward` meses en el futuro (para poder ver
+// cuotas/débitos ya generados a futuro) a `back` meses en el pasado, más reciente primero.
+function monthOptionsAround(centerMonth, back = 24, forward = 12) {
+  const [y, m] = centerMonth.split("-").map(Number);
+  const list = [];
+  for (let i = forward; i >= -back; i--) {
+    const d = new Date(y, m - 1 + i, 1);
+    list.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  }
+  return list;
+}
 
 const monthKey = (d) => {
   const dt = new Date(`${d}T00:00:00`);
@@ -304,30 +322,70 @@ function MoneyInput({ value, onChange, placeholder = "0", className = "" }) {
 // y con scroll interno, así una lista larga (subcategorías, por ejemplo) no tapa nada.
 function Select({ value, onChange, children, disabled = false, className = "" }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+  const [pos, setPos] = useState(null);
+  const btnRef = useRef(null);
+  const menuRef = useRef(null);
+
   useEffect(() => {
-    function handler(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    function handler(e) {
+      if (btnRef.current?.contains(e.target)) return;
+      if (menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    }
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
+
+  // El menú se renderiza vía portal directo a <body> — si viviera dentro de la jerarquía normal,
+  // un ancestro con scroll propio (ej. .filter-grid, que tiene overflow-x:auto — y por eso mismo
+  // el navegador trata overflow-y como auto también, aunque no se haya pedido) lo recorta, y hay
+  // que "scrollear adentro" de una fila para ver 2 de 4 opciones. Con el portal, el menú es
+  // position:fixed en coordenadas de viewport, así ningún contenedor lo puede recortar.
+  useEffect(() => {
+    if (!open) return;
+    function close() { setOpen(false); }
+    // Si se scrollea la página mientras está abierto, se cierra en vez de quedar desalineado.
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open]);
+
   const options = React.Children.toArray(children).filter((c) => c && c.props).map((c) => ({ value: c.props.value, label: c.props.children }));
   const current = options.find((o) => String(o.value) === String(value ?? ""));
+
+  function toggle() {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      const width = Math.max(r.width, 150);
+      const left = Math.min(r.left, window.innerWidth - width - 8);
+      setPos({ top: r.bottom + 4, left: Math.max(8, left), width });
+    }
+    setOpen((o) => !o);
+  }
+
   return (
-    <div ref={ref} style={{ position: "relative" }}>
+    <div style={{ position: "relative" }}>
       <button
-        type="button" disabled={disabled} onClick={() => setOpen((o) => !o)}
+        ref={btnRef}
+        type="button" disabled={disabled} onClick={toggle}
         className={`control ${className}`}
         style={{ textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, cursor: disabled ? "default" : "pointer" }}
       >
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{current ? current.label : ""}</span>
         <span style={{ opacity: 0.55, fontSize: "0.7em", flexShrink: 0 }}>▾</span>
       </button>
-      {open && !disabled && (
-        <div style={{
-          position: "absolute", top: "100%", left: 0, right: 0, zIndex: 300,
-          background: "var(--surface-2)", border: "1.5px solid var(--border)", borderRadius: 10,
-          boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: 260, overflowY: "auto", marginTop: 2,
-        }}>
+      {open && !disabled && pos && createPortal(
+        <div
+          ref={menuRef}
+          style={{
+            position: "fixed", top: pos.top, left: pos.left, width: pos.width, zIndex: 1000,
+            background: "var(--surface-2)", border: "1.5px solid var(--border)", borderRadius: 10,
+            boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: 260, overflowY: "auto",
+          }}
+        >
           {options.map((o) => (
             <div
               key={String(o.value)}
@@ -342,7 +400,100 @@ function Select({ value, onChange, children, disabled = false, className = "" })
               {o.label}
             </div>
           ))}
-        </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
+// "Mes global": elegir uno o varios meses (checklist), en vez de un <input type="month"> que solo
+// permite uno. Mismo mecanismo de portal que Select, por la misma razón (evitar que un ancestro con
+// scroll recorte el menú).
+function MonthMultiSelect({ value, onChange, className = "" }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
+  const btnRef = useRef(null);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    function handler(e) {
+      if (btnRef.current?.contains(e.target)) return;
+      if (menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    function close() { setOpen(false); }
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open]);
+
+  const options = useMemo(() => monthOptionsAround(currentMonth()), []);
+
+  function toggle() {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      const width = Math.max(r.width, 190);
+      const left = Math.min(r.left, window.innerWidth - width - 8);
+      setPos({ top: r.bottom + 4, left: Math.max(8, left), width });
+    }
+    setOpen((o) => !o);
+  }
+  function toggleMonth(mo) {
+    if (value.includes(mo)) {
+      if (value.length === 1) return; // siempre al menos un mes elegido
+      onChange(value.filter((m) => m !== mo).sort());
+    } else {
+      onChange([...value, mo].sort());
+    }
+  }
+
+  const label = value.length === 1 ? monthLabel(value[0]) : `${value.length} meses elegidos`;
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        ref={btnRef} type="button" onClick={toggle} className={`control ${className}`}
+        style={{ textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, cursor: "pointer" }}
+      >
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+        <span style={{ opacity: 0.55, fontSize: "0.7em", flexShrink: 0 }}>▾</span>
+      </button>
+      {open && pos && createPortal(
+        <div
+          ref={menuRef}
+          style={{
+            position: "fixed", top: pos.top, left: pos.left, width: pos.width, zIndex: 1000,
+            background: "var(--surface-2)", border: "1.5px solid var(--border)", borderRadius: 10,
+            boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: 300, overflowY: "auto",
+          }}
+        >
+          {options.map((mo) => {
+            const checked = value.includes(mo);
+            return (
+              <div
+                key={mo}
+                onMouseDown={(e) => { e.preventDefault(); toggleMonth(mo); }}
+                style={{
+                  padding: "8px 14px", cursor: "pointer", fontSize: "0.85rem", display: "flex", alignItems: "center", gap: 8,
+                  background: checked ? "var(--primary-light)" : "transparent",
+                  color: checked ? "var(--primary)" : "var(--text)", fontWeight: checked ? 700 : 400,
+                }}
+              >
+                <span style={{ width: 15, height: 15, borderRadius: 4, border: "1.5px solid currentColor", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.65rem", flexShrink: 0 }}>{checked ? "✓" : ""}</span>
+                {monthLabel(mo)}
+              </div>
+            );
+          })}
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -563,10 +714,15 @@ export default function App() {
   const [editingMovId, setEditingMovId] = useState(null);
   const [editMovData, setEditMovData] = useState({ date: "", person: "", type: "", category: "", subcategoryId: "", description: "", currency: "ARS", originalAmount: "", paymentMethod: "", cardId: "" });
 
-  const [reportMonth, setReportMonth] = useState(currentMonth());
+  // "Mes global": uno o más meses. Las vistas que solo tienen sentido para UN mes (Dashboard,
+  // Presupuesto, Reportes, cobros esperados de préstamos...) usan reportMonth, el último elegido.
+  // Datos (la lista de movimientos) sí puede filtrar por varios meses a la vez, usa reportMonths
+  // completo.
+  const [reportMonths, setReportMonths] = useState([currentMonth()]);
+  const reportMonth = reportMonths[reportMonths.length - 1];
   const [selectedPerson, setSelectedPerson] = useState("all");
   const [reportBudgetPerson, setReportBudgetPerson] = useState("all");
-  const [filters, setFilters] = useState({ type: "all", category: "all", subcategoryId: "all", dateFrom: currentMonth() + "-01", dateTo: today(), currency: "all", fv: "all", search: "" });
+  const [filters, setFilters] = useState({ type: "all", category: "all", subcategoryId: "all", currency: "all", fv: "all", search: "" });
   const [evolutionSearch, setEvolutionSearch] = useState("");
   const [expandedTypes, setExpandedTypes] = useState({});
   const [expandedCats, setExpandedCats] = useState({});
@@ -1771,8 +1927,7 @@ export default function App() {
       if (filters.category !== "all" && m.category !== filters.category) return false;
       if (filters.subcategoryId !== "all" && String(m.subcategoryId) !== filters.subcategoryId) return false;
       if (filters.currency !== "all" && m.currency !== filters.currency) return false;
-      if (filters.dateFrom && m.date < filters.dateFrom) return false;
-      if (filters.dateTo && m.date > filters.dateTo) return false;
+      if (!reportMonths.includes(monthKey(m.date))) return false;
       if (filters.fv !== "all" && (m.type !== "Egreso" || getFV(m.type, m.category) !== filters.fv)) return false;
       if (q) {
         const haystack = `${m.category} ${subcategoryNameById[m.subcategoryId] || ""} ${m.description || ""} ${m.person}`.toLowerCase();
@@ -1780,7 +1935,7 @@ export default function App() {
       }
       return true;
     });
-  }, [personMovements, filters, getFV, subcategoryNameById]);
+  }, [personMovements, filters, reportMonths, getFV, subcategoryNameById]);
 
   // Suma de lo filtrado/buscado en Datos, para que se vea el total sin tener que sumar a mano.
   const filteredMovementsTotals = useMemo(() => {
@@ -1817,7 +1972,7 @@ export default function App() {
       m.date, m.person, m.type, m.category, subcategoryNameById[m.subcategoryId] || "", m.type === "Egreso" ? getFV(m.type, m.category) : "", m.description || "",
       m.paymentMethod || "", m.currency, m.originalAmount, m.fxRate, Number(m.amountArs || 0).toFixed(2), Number(m.amountUsd || 0).toFixed(2),
     ]);
-    downloadCSV([headers, ...rows], `movimientos_${filters.dateFrom}_${filters.dateTo}`);
+    downloadCSV([headers, ...rows], `movimientos_${reportMonths.join("-")}`);
   }
 
   function exportSection(section) {
@@ -1846,7 +2001,7 @@ export default function App() {
       });
       headers = ["Mes","Persona","Tipo","Categoría","Presupuestado","Real","Diferencia","% Ejecución"];
       rows = desvRows;
-      filename = `desviaciones_${filters.dateFrom}_${filters.dateTo}`;
+      filename = `desviaciones_${reportMonths.join("-")}`;
     }
     if (headers && rows && filename) downloadCSV([headers, ...rows], filename);
   }
@@ -1917,13 +2072,7 @@ export default function App() {
               </Select>
             </Field>
             <Field label="Mes global">
-              <Input type="month" value={reportMonth} onChange={(e) => {
-                const m = e.target.value;
-                setReportMonth(m);
-                const [y, mo] = m.split("-").map(Number);
-                const lastDay = new Date(y, mo, 0).getDate();
-                setFilters((f) => ({ ...f, dateFrom: `${m}-01`, dateTo: `${m}-${String(lastDay).padStart(2,"0")}` }));
-              }} />
+              <MonthMultiSelect value={reportMonths} onChange={setReportMonths} />
             </Field>
             <Field label="Visualización">
               <Select value={displayCurrency} onChange={setDisplayCurrency}>
@@ -2039,31 +2188,6 @@ export default function App() {
               <div style={{ marginTop: 16 }}><Btn onClick={addMovement} disabled={saving || !movForm.type || !movForm.category || !movForm.originalAmount || (!movForm.shared && !movForm.person) || (movForm.shared && movForm.sharedPeople.length < 2)}>{saving ? "Guardando…" : "＋ Agregar movimiento"}</Btn></div>
             </Card>
 
-            <Card>
-              <CardHead title="Transferencia entre tipos" icon="🔀" />
-              <p className="muted small" style={{ marginBottom: 12 }}>Movés plata de un tipo a otro (ej. Ahorro → Inversión). Se crean dos movimientos automáticamente.</p>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
-                <Field label="Fecha"><Input type="date" value={transferForm.date} onChange={(e) => setTransferForm({ ...transferForm, date: e.target.value })} /></Field>
-                <Field label="Persona"><Select value={transferForm.person} onChange={(v) => setTransferForm({ ...transferForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
-                <Field label="De"><Select value={transferForm.fromType} onChange={(v) => setTransferForm({ ...transferForm, fromType: v, fromCategory: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                <Field label="Categoría"><Select value={transferForm.fromCategory} onChange={(v) => setTransferForm({ ...transferForm, fromCategory: v })}><option value="">Seleccionar…</option>{(categoryMap[transferForm.fromType] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
-                <div style={{ fontSize: "1.2rem", paddingBottom: 9, color: "var(--muted)" }}>→</div>
-                <Field label="A"><Select value={transferForm.toType} onChange={(v) => setTransferForm({ ...transferForm, toType: v, toCategory: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                <Field label="Categoría"><Select value={transferForm.toCategory} onChange={(v) => setTransferForm({ ...transferForm, toCategory: v })}><option value="">Seleccionar…</option>{(categoryMap[transferForm.toType] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
-                <Field label="Moneda"><Select value={transferForm.currency} onChange={(v) => setTransferForm({ ...transferForm, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
-                <Field label={`Importe (${transferForm.currency})`}><MoneyInput value={transferForm.originalAmount} onChange={(e) => setTransferForm({ ...transferForm, originalAmount: e.target.value })} placeholder="0" /></Field>
-              </div>
-              <div style={{ marginTop: 10 }}>
-                <Field label="Descripción (opcional)"><Input value={transferForm.description} onChange={(e) => setTransferForm({ ...transferForm, description: e.target.value })} placeholder={`Ej. Paso fondos de ${transferForm.fromCategory || "origen"} a ${transferForm.toCategory || "destino"}`} /></Field>
-              </div>
-              {transferForm.originalAmount && transferForm.fromCategory && transferForm.toCategory && (
-                <InfoBox color="blue">Se crearán 2 movimientos por <strong>{transferForm.currency === "USD" ? money(transferForm.originalAmount, "USD") : money(toArs(transferForm.originalAmount, "ARS", 1))}</strong>: un egreso de <strong>{transferForm.fromCategory}</strong> ({transferForm.fromType}) y un ingreso en <strong>{transferForm.toCategory}</strong> ({transferForm.toType}).</InfoBox>
-              )}
-              <div style={{ marginTop: 14 }}>
-                <Btn onClick={addTransfer} disabled={saving || !transferForm.fromCategory || !transferForm.toCategory || !transferForm.originalAmount}>{saving ? "Guardando…" : "🔀 Registrar transferencia"}</Btn>
-              </div>
-            </Card>
-
             {loans.length > 0 && (
               <Card>
                 <CardHead title="Cobrar cuota de préstamo" icon="🏦" />
@@ -2108,6 +2232,33 @@ export default function App() {
                 <div style={{ marginTop: 12 }}><Btn onClick={registerLoanPayment} disabled={saving || !loanPayForm.loanId || !loanPayForm.amount}>{saving ? "Guardando…" : "＋ Registrar cobro"}</Btn></div>
               </Card>
             )}
+
+            {/* Al final: se usa poco, no hace falta que compita con Cargar/Cobrar cuota por
+                atención arriba de todo. */}
+            <Card>
+              <CardHead title="Transferencia entre tipos" icon="🔀" />
+              <p className="muted small" style={{ marginBottom: 12 }}>Movés plata de un tipo a otro (ej. Ahorro → Inversión). Se crean dos movimientos automáticamente.</p>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
+                <Field label="Fecha"><Input type="date" value={transferForm.date} onChange={(e) => setTransferForm({ ...transferForm, date: e.target.value })} /></Field>
+                <Field label="Persona"><Select value={transferForm.person} onChange={(v) => setTransferForm({ ...transferForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                <Field label="De"><Select value={transferForm.fromType} onChange={(v) => setTransferForm({ ...transferForm, fromType: v, fromCategory: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
+                <Field label="Categoría"><Select value={transferForm.fromCategory} onChange={(v) => setTransferForm({ ...transferForm, fromCategory: v })}><option value="">Seleccionar…</option>{(categoryMap[transferForm.fromType] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+                <div style={{ fontSize: "1.2rem", paddingBottom: 9, color: "var(--muted)" }}>→</div>
+                <Field label="A"><Select value={transferForm.toType} onChange={(v) => setTransferForm({ ...transferForm, toType: v, toCategory: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
+                <Field label="Categoría"><Select value={transferForm.toCategory} onChange={(v) => setTransferForm({ ...transferForm, toCategory: v })}><option value="">Seleccionar…</option>{(categoryMap[transferForm.toType] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+                <Field label="Moneda"><Select value={transferForm.currency} onChange={(v) => setTransferForm({ ...transferForm, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
+                <Field label={`Importe (${transferForm.currency})`}><MoneyInput value={transferForm.originalAmount} onChange={(e) => setTransferForm({ ...transferForm, originalAmount: e.target.value })} placeholder="0" /></Field>
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <Field label="Descripción (opcional)"><Input value={transferForm.description} onChange={(e) => setTransferForm({ ...transferForm, description: e.target.value })} placeholder={`Ej. Paso fondos de ${transferForm.fromCategory || "origen"} a ${transferForm.toCategory || "destino"}`} /></Field>
+              </div>
+              {transferForm.originalAmount && transferForm.fromCategory && transferForm.toCategory && (
+                <InfoBox color="blue">Se crearán 2 movimientos por <strong>{transferForm.currency === "USD" ? money(transferForm.originalAmount, "USD") : money(toArs(transferForm.originalAmount, "ARS", 1))}</strong>: un egreso de <strong>{transferForm.fromCategory}</strong> ({transferForm.fromType}) y un ingreso en <strong>{transferForm.toCategory}</strong> ({transferForm.toType}).</InfoBox>
+              )}
+              <div style={{ marginTop: 14 }}>
+                <Btn onClick={addTransfer} disabled={saving || !transferForm.fromCategory || !transferForm.toCategory || !transferForm.originalAmount}>{saving ? "Guardando…" : "🔀 Registrar transferencia"}</Btn>
+              </div>
+            </Card>
           </div>
         )}
 
@@ -2347,9 +2498,9 @@ export default function App() {
               <Btn onClick={() => exportSection("desviaciones")} variant="outline" small>⬇ Exportar desviaciones</Btn>
               <span className="muted small">{filteredMovements.length} registros</span>
             </div>
-            {/* Filtro de qué es el movimiento, pegado a la lista (no en el filtro general de
-                arriba) -- Tipo/Categoría/Subcategoría, 3 por fila. */}
-            <Card>
+            {/* Mismo filtro que en el <thead> de la tabla de abajo, para cuando se ve como
+                tarjetas (mobile, donde toda la tabla -- encabezado incluido -- se oculta). */}
+            <Card className="datos-mobile-filter">
               <div className="form-grid three-col">
                 <Field label="Tipo"><Select value={filters.type} onChange={(v) => setFilters({ ...filters, type: v })}><option value="all">Todos</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
                 <Field label="Categoría"><Select value={filters.category} onChange={(v) => setFilters({ ...filters, category: v, subcategoryId: "all" })}><option value="all">Todas</option>{[...new Set(Object.values(categoryMap).flat())].map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
@@ -2366,7 +2517,34 @@ export default function App() {
             <Card>
               <div className="table-wrap">
                 <table className="data-table">
-                  <thead><tr><th>Fecha</th><th>Persona</th><th>Tipo</th><th>Categoría</th><th>Subcategoría</th><th>F/V</th><th>Detalle</th><th>Moneda</th><th>Original</th><th>ARS</th><th>USD</th><th></th></tr></thead>
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Persona</th>
+                      <th className="th-filter">
+                        <Select value={filters.type} onChange={(v) => setFilters({ ...filters, type: v })}><option value="all">Tipo: Todos</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select>
+                      </th>
+                      <th className="th-filter">
+                        <Select value={filters.category} onChange={(v) => setFilters({ ...filters, category: v, subcategoryId: "all" })}>
+                          <option value="all">Categoría: Todas</option>
+                          {[...new Set(Object.values(categoryMap).flat())].map((c) => <option key={c} value={c}>{c}</option>)}
+                        </Select>
+                      </th>
+                      <th className="th-filter">
+                        <Select value={filters.subcategoryId} onChange={(v) => setFilters({ ...filters, subcategoryId: v })}>
+                          <option value="all">Subcat.: Todas</option>
+                          {subcategoryRows
+                            .filter((s) => filters.category === "all" || categoryRows.find((c) => c.id === s.category_id)?.name === filters.category)
+                            .map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+                        </Select>
+                      </th>
+                      <th>F/V</th>
+                      <th>Detalle</th>
+                      <th>ARS</th>
+                      <th>USD</th>
+                      <th></th>
+                    </tr>
+                  </thead>
                   <tbody>
                     {filteredMovements.map((m) => {
                       const isEditing = editingMovId === m.id;
@@ -2390,23 +2568,23 @@ export default function App() {
                             <td className="muted">{subcategoryNameById[m.subcategoryId] || "—"}</td>
                             <td>{m.type === "Egreso" ? <Badge color={getFV(m.type, m.category) === "F" ? "red" : "amber"}>{getFV(m.type, m.category)}</Badge> : "—"}</td>
                             <td className="muted">{m.description || "—"}</td>
-                            <td>{m.currency}</td>
-                            <td className="number">{money(m.originalAmount, m.currency)}</td>
                             <td className="number fw">{fmtArs(m.amountArs)}</td>
                             <td className="number muted">{money(m.amountUsd || 0, "USD")}</td>
-                            <td style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                              {!isClosed && (
-                                isEditing
-                                  ? <button className="del-btn" onClick={() => setEditingMovId(null)}>✕</button>
-                                  : <button className="del-btn" style={{ borderColor: "var(--primary)", color: "var(--primary)" }} onClick={() => startEditMovement(m)}>✏</button>
-                              )}
-                              {!isClosed && <button className="del-btn" onClick={() => deleteMovement(m.id)}>🗑</button>}
-                              {isClosed && <span className="muted small">🔒</span>}
+                            <td>
+                              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                                {!isClosed && (
+                                  isEditing
+                                    ? <button className="del-btn" onClick={() => setEditingMovId(null)}>✕</button>
+                                    : <button className="del-btn" style={{ borderColor: "var(--primary)", color: "var(--primary)" }} onClick={() => startEditMovement(m)}>✏</button>
+                                )}
+                                {!isClosed && <button className="del-btn" onClick={() => deleteMovement(m.id)}>🗑</button>}
+                                {isClosed && <span className="muted small">🔒</span>}
+                              </div>
                             </td>
                           </tr>
                           {isEditing && (
                             <tr>
-                              <td colSpan={12}>
+                              <td colSpan={10}>
                                 <MovementEditPanel
                                   data={editMovData} onChange={setEditMovData} types={types} categoryMap={categoryMap}
                                   subcategoryMap={subcategoryMap} categoryIdFor={categoryIdFor} people={people} cards={cards}
