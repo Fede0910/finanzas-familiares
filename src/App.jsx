@@ -304,6 +304,22 @@ function MoneyInput({ value, onChange, placeholder = "0", className = "" }) {
     />
   );
 }
+// Dónde poner un menú desplegable (portal a <body>) a partir del rect de su botón: si el botón
+// está cerca del final de la pantalla (ej. la última card de una solapa larga) y el menú no entra
+// completo hacia abajo, lo abre hacia arriba en su lugar — y en cualquier caso lo recorta a lo que
+// realmente entra en la pantalla, así nunca queda una parte de la lista afuera de la vista.
+function computeMenuPos(btnRect, minWidth, preferredMaxHeight) {
+  const width = Math.max(btnRect.width, minWidth);
+  const left = Math.max(8, Math.min(btnRect.left, window.innerWidth - width - 8));
+  const spaceBelow = window.innerHeight - btnRect.bottom - 8;
+  const spaceAbove = btnRect.top - 8;
+  if (spaceBelow >= 120 || spaceBelow >= spaceAbove) {
+    return { top: btnRect.bottom + 4, left, width, maxHeight: Math.max(80, Math.min(preferredMaxHeight, spaceBelow)) };
+  }
+  const maxHeight = Math.max(80, Math.min(preferredMaxHeight, spaceAbove));
+  return { top: btnRect.top - 4 - maxHeight, left, width, maxHeight };
+}
+
 // Reemplaza el <select> nativo por una lista propia. En mobile, el <select> nativo abre un picker
 // del sistema operativo con letra enorme que tapa toda la pantalla y no se puede achicar con CSS
 // (no es parte de la página) — acá el desplegable es un <div> más, con nuestra propia letra chica
@@ -352,10 +368,7 @@ function Select({ value, onChange, children, disabled = false, className = "" })
 
   function toggle() {
     if (!open && btnRef.current) {
-      const r = btnRef.current.getBoundingClientRect();
-      const width = Math.max(r.width, 150);
-      const left = Math.min(r.left, window.innerWidth - width - 8);
-      setPos({ top: r.bottom + 4, left: Math.max(8, left), width });
+      setPos(computeMenuPos(btnRef.current.getBoundingClientRect(), 150, 260));
     }
     setOpen((o) => !o);
   }
@@ -377,7 +390,7 @@ function Select({ value, onChange, children, disabled = false, className = "" })
           style={{
             position: "fixed", top: pos.top, left: pos.left, width: pos.width, zIndex: 1000,
             background: "var(--surface-2)", border: "1.5px solid var(--border)", borderRadius: 10,
-            boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: 260, overflowY: "auto",
+            boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: pos.maxHeight, overflowY: "auto",
           }}
         >
           {options.map((o) => (
@@ -444,10 +457,7 @@ function MonthMultiSelect({ value, onChange, months, className = "" }) {
 
   function toggle() {
     if (!open && btnRef.current) {
-      const r = btnRef.current.getBoundingClientRect();
-      const width = Math.max(r.width, 190);
-      const left = Math.min(r.left, window.innerWidth - width - 8);
-      setPos({ top: r.bottom + 4, left: Math.max(8, left), width });
+      setPos(computeMenuPos(btnRef.current.getBoundingClientRect(), 190, 300));
     }
     setOpen((o) => !o);
   }
@@ -476,7 +486,7 @@ function MonthMultiSelect({ value, onChange, months, className = "" }) {
           style={{
             position: "fixed", top: pos.top, left: pos.left, width: pos.width, zIndex: 1000,
             background: "var(--surface-2)", border: "1.5px solid var(--border)", borderRadius: 10,
-            boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: 300, overflowY: "auto",
+            boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: pos.maxHeight, overflowY: "auto",
           }}
         >
           {options.map((mo) => {
@@ -543,10 +553,7 @@ function MonthSelect({ value, onChange, months, className = "" }) {
 
   function toggle() {
     if (!open && btnRef.current) {
-      const r = btnRef.current.getBoundingClientRect();
-      const width = Math.max(r.width, 170);
-      const left = Math.min(r.left, window.innerWidth - width - 8);
-      setPos({ top: r.bottom + 4, left: Math.max(8, left), width });
+      setPos(computeMenuPos(btnRef.current.getBoundingClientRect(), 170, 280));
     }
     setOpen((o) => !o);
   }
@@ -566,7 +573,7 @@ function MonthSelect({ value, onChange, months, className = "" }) {
           style={{
             position: "fixed", top: pos.top, left: pos.left, width: pos.width, zIndex: 1000,
             background: "var(--surface-2)", border: "1.5px solid var(--border)", borderRadius: 10,
-            boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: 280, overflowY: "auto",
+            boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: pos.maxHeight, overflowY: "auto",
           }}
         >
           {options.map((mo) => (
@@ -846,7 +853,7 @@ export default function App() {
   const [balanceForm, setBalanceForm] = useState({ month: currentMonth(), opening: "", notes: "" });
   const [catalogForm, setCatalogForm] = useState({ person: "", type: "", categoryType: "Egreso", category: "", categoryFv: "V" });
   const [subcatForm, setSubcatForm] = useState({ categoryType: "Egreso", categoryId: "", name: "" });
-  const [cardForm, setCardForm] = useState({ name: "", owner: "Federico" });
+  const [cardForm, setCardForm] = useState({ name: "", owner: "Federico", closingDay: "" });
   const [debitoForm, setDebitoForm] = useState({
     person: "Federico", type: "Egreso", category: "", subcategoryId: "", description: "",
     currency: "ARS", amount: "", dayOfMonth: "10", startDate: today(),
@@ -1139,7 +1146,10 @@ export default function App() {
     }));
 
     if (isCardInstallments) {
-      const dayOfMonth = Number(movForm.date.split("-")[2]);
+      // Mismo criterio que en la compra individual: si la tarjeta tiene día de cierre, se usa ese
+      // en vez del día de la compra.
+      const card = cards.find((c) => c.id === cardId);
+      const dayOfMonth = card?.closing_day || Number(movForm.date.split("-")[2]);
       const dates = generateSeriesDates(movForm.date, dayOfMonth, installments);
       const newSeries = [];
       const allRows = [];
@@ -1198,7 +1208,11 @@ export default function App() {
     const n = Number(movForm.installments);
     const total = Number(movForm.originalAmount);
     if (!n || n < 2 || !total) return;
-    const dayOfMonth = Number(movForm.date.split("-")[2]);
+    // Si la tarjeta tiene día de cierre configurado, las cuotas se cuentan desde ahí (comprar
+    // después del cierre pasa la primera cuota al mes que viene, como en el resumen real) — si no,
+    // se sigue usando el día de la compra como antes.
+    const card = cards.find((c) => c.id === Number(movForm.cardId));
+    const dayOfMonth = card?.closing_day || Number(movForm.date.split("-")[2]);
     const dates = generateSeriesDates(movForm.date, dayOfMonth, n);
     const rate = movForm.currency === "USD" ? blueRate : 1;
     const perInstallment = Math.round((total / n) * 100) / 100;
@@ -1753,10 +1767,13 @@ export default function App() {
   async function addCard() {
     const name = cardForm.name.trim();
     if (!name) return;
-    const { data, error } = await supabase.from("cards").insert([{ name, owner: cardForm.owner, active: true }]).select().single();
+    const { data, error } = await supabase.from("cards").insert([{
+      name, owner: cardForm.owner, active: true,
+      closing_day: cardForm.closingDay ? Number(cardForm.closingDay) : null,
+    }]).select().single();
     if (error) { console.error(error); return; }
     setCards((prev) => [...prev, data]);
-    setCardForm((f) => ({ ...f, name: "" }));
+    setCardForm((f) => ({ ...f, name: "", closingDay: "" }));
   }
   async function removeCard(row) {
     const used = movements.some((m) => m.cardId === row.id);
@@ -2137,6 +2154,14 @@ export default function App() {
   }
 
   const selectedDebtForMov = personDebts.find((d) => String(d.id) === String(movForm.linkedDebtId));
+  // Primera fecha real de cuota para la previsualización: si la tarjeta tiene día de cierre y la
+  // compra es posterior a ese día, la primera cuota cae el mes que viene, no en la fecha de compra.
+  const firstCuotaDate = useMemo(() => {
+    if (movForm.paymentMethod !== "Tarjeta" || !movForm.cardId || Number(movForm.installments) <= 1 || !movForm.date) return movForm.date;
+    const card = cards.find((c) => c.id === Number(movForm.cardId));
+    const dayOfMonth = card?.closing_day || Number(movForm.date.split("-")[2]);
+    return generateSeriesDates(movForm.date, dayOfMonth, 1)[0];
+  }, [movForm.paymentMethod, movForm.cardId, movForm.installments, movForm.date, cards]);
   const descriptionSuggestions = useMemo(() => {
     if (!movForm.category) return [];
     const seen = new Set();
@@ -2262,12 +2287,12 @@ export default function App() {
                 const perInstallment = share / Number(movForm.installments);
                 return (
                   <InfoBox color="blue">
-                    Se reparte en partes iguales entre <strong>{movForm.sharedPeople.join(", ")}</strong>: <strong>{money(share, movForm.currency)}</strong> cada uno · y la parte de cada uno se cobra en <strong>{movForm.installments} cuotas mensuales</strong> de <strong>{money(perInstallment, movForm.currency)}</strong>, empezando el {movForm.date}.
+                    Se reparte en partes iguales entre <strong>{movForm.sharedPeople.join(", ")}</strong>: <strong>{money(share, movForm.currency)}</strong> cada uno · y la parte de cada uno se cobra en <strong>{movForm.installments} cuotas mensuales</strong> de <strong>{money(perInstallment, movForm.currency)}</strong>, empezando el {firstCuotaDate}{firstCuotaDate !== movForm.date ? " (la tarjeta ya cerró el resumen de este mes)" : ""}.
                   </InfoBox>
                 );
               })()}
               {movForm.paymentMethod === "Tarjeta" && Number(movForm.installments) > 1 && movForm.originalAmount && !(movForm.shared && movForm.sharedPeople.length >= 2) && (
-                <InfoBox color="blue">Se van a crear <strong>{movForm.installments} movimientos mensuales</strong> de <strong>{money(Number(movForm.originalAmount) / Number(movForm.installments), movForm.currency)}</strong> cada uno, empezando el {movForm.date}.</InfoBox>
+                <InfoBox color="blue">Se van a crear <strong>{movForm.installments} movimientos mensuales</strong> de <strong>{money(Number(movForm.originalAmount) / Number(movForm.installments), movForm.currency)}</strong> cada uno, empezando el {firstCuotaDate}{firstCuotaDate !== movForm.date ? " (la tarjeta ya cerró el resumen de este mes)" : ""}.</InfoBox>
               )}
               {!(movForm.paymentMethod === "Tarjeta" && Number(movForm.installments) > 1) && movForm.shared && movForm.sharedPeople.length >= 2 && movForm.originalAmount && (
                 <InfoBox color="blue">Se reparte en partes iguales entre <strong>{movForm.sharedPeople.join(", ")}</strong>: <strong>{money(Number(movForm.originalAmount) / movForm.sharedPeople.length, movForm.currency)}</strong> cada uno.</InfoBox>
@@ -3397,13 +3422,15 @@ export default function App() {
               </Card>
               <Card>
                 <CardHead title="Tarjetas" icon="💳" />
+                <p className="muted small" style={{ marginBottom: 12 }}>El día de cierre define a qué mes se le carga una compra en cuotas: si la comprás después de ese día, la primera cuota pasa al mes siguiente (el resumen ya cerró).</p>
                 <div className="form-grid three-col">
                   <Field label="Nombre"><Input value={cardForm.name} onChange={(e) => setCardForm({ ...cardForm, name: e.target.value })} placeholder="Ej. Visa Banco X" /></Field>
                   <Field label="Responsable"><Select value={cardForm.owner} onChange={(v) => setCardForm({ ...cardForm, owner: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                  <Field label="Día de cierre"><Input type="number" min="1" max="28" value={cardForm.closingDay} onChange={(e) => setCardForm({ ...cardForm, closingDay: e.target.value })} placeholder="Ej. 20 (opcional)" /></Field>
                 </div>
                 <div style={{ marginTop: 12 }}><Btn onClick={addCard}>＋ Agregar tarjeta</Btn></div>
                 <div className="tag-list" style={{ marginTop: 12 }}>
-                  {cards.map((c) => <span key={c.id} className="tag">{c.name} · {c.owner}<button onClick={() => removeCard(c)}>×</button></span>)}
+                  {cards.map((c) => <span key={c.id} className="tag">{c.name} · {c.owner}{c.closing_day ? ` · cierra el ${c.closing_day}` : ""}<button onClick={() => removeCard(c)}>×</button></span>)}
                   {cards.length === 0 && <span className="muted small">Sin tarjetas cargadas.</span>}
                 </div>
               </Card>
