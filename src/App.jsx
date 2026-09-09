@@ -1140,6 +1140,19 @@ export default function App() {
         }
       }
     }
+    // Si el movimiento es un cobro de cuota de préstamo cargado por error, hay que borrar también
+    // el registro en loan_payments -- si no, el préstamo lo sigue contando como cobrado (queda
+    // huérfano) aunque el ingreso ya no exista, y la cuota no vuelve a aparecer como pendiente.
+    const linkedPayment = loanPayments.find((p) => p.linkedMovementId === id);
+    if (linkedPayment) {
+      const loan = loans.find((l) => l.id === linkedPayment.loanId);
+      const confirmMsg = loan
+        ? `Este movimiento es el cobro de una cuota del préstamo "${loan.name}". Al borrarlo también se borra el registro de ese cobro, y la cuota vuelve a quedar pendiente. ¿Continuar?`
+        : "Este movimiento es un cobro de préstamo. Al borrarlo también se borra ese registro de cobro. ¿Continuar?";
+      if (!window.confirm(confirmMsg)) return;
+      await supabase.from("loan_payments").delete().eq("id", linkedPayment.id);
+      setLoanPayments((prev) => prev.filter((p) => p.id !== linkedPayment.id));
+    }
     await supabase.from("movements").delete().eq("id", id);
     setMovements((prev) => prev.filter((m) => m.id !== id));
   }
