@@ -872,6 +872,8 @@ export default function App() {
   const [catalogForm, setCatalogForm] = useState({ person: "", type: "", categoryType: "Egreso", category: "", categoryFv: "V" });
   const [subcatForm, setSubcatForm] = useState({ categoryType: "Egreso", categoryId: "", name: "" });
   const [cardForm, setCardForm] = useState({ name: "", owner: "Federico", closingDay: "" });
+  const [editingCardId, setEditingCardId] = useState(null);
+  const [editCardData, setEditCardData] = useState({ name: "", owner: "Federico", closingDay: "" });
   const [debitoForm, setDebitoForm] = useState({
     person: "Federico", type: "Egreso", category: "", subcategoryId: "", description: "",
     currency: "ARS", amount: "", dayOfMonth: "10", startDate: today(),
@@ -1799,6 +1801,19 @@ export default function App() {
     const { error } = await supabase.from("cards").update({ active: false }).eq("id", row.id);
     if (error) return;
     setCards((prev) => prev.filter((c) => c.id !== row.id));
+  }
+  function startEditCard(c) {
+    setEditingCardId(c.id);
+    setEditCardData({ name: c.name, owner: c.owner || "Federico", closingDay: c.closing_day ? String(c.closing_day) : "" });
+  }
+  async function saveEditCard(id) {
+    const name = editCardData.name.trim();
+    if (!name) return;
+    const closing_day = editCardData.closingDay ? Number(editCardData.closingDay) : null;
+    const { error } = await supabase.from("cards").update({ name, owner: editCardData.owner, closing_day }).eq("id", id);
+    if (error) { console.error(error); return; }
+    setCards((prev) => prev.map((c) => c.id === id ? { ...c, name, owner: editCardData.owner, closing_day } : c));
+    setEditingCardId(null);
   }
 
   // Meses con al menos un movimiento cargado (de cualquier persona) — es lo que ofrece elegir
@@ -3454,8 +3469,26 @@ export default function App() {
                   <Field label="Día de cierre"><Input type="number" min="1" max="28" value={cardForm.closingDay} onChange={(e) => setCardForm({ ...cardForm, closingDay: e.target.value })} placeholder="Ej. 20 (opcional)" /></Field>
                 </div>
                 <div style={{ marginTop: 12 }}><Btn onClick={addCard}>＋ Agregar tarjeta</Btn></div>
-                <div className="tag-list" style={{ marginTop: 12 }}>
-                  {cards.map((c) => <span key={c.id} className="tag">{c.name} · {c.owner}{c.closing_day ? ` · cierra el ${c.closing_day}` : ""}<button onClick={() => removeCard(c)}>×</button></span>)}
+                <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+                  {cards.map((c) => (
+                    editingCardId === c.id ? (
+                      <div key={c.id} className="form-grid three-col" style={{ padding: 10, background: "var(--surface-2)", borderRadius: 10 }}>
+                        <Field label="Nombre"><Input value={editCardData.name} onChange={(e) => setEditCardData({ ...editCardData, name: e.target.value })} /></Field>
+                        <Field label="Responsable"><Select value={editCardData.owner} onChange={(v) => setEditCardData({ ...editCardData, owner: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                        <Field label="Día de cierre"><Input type="number" min="1" max="28" value={editCardData.closingDay} onChange={(e) => setEditCardData({ ...editCardData, closingDay: e.target.value })} placeholder="Opcional" /></Field>
+                        <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
+                          <Btn small onClick={() => saveEditCard(c.id)}>✓ Guardar</Btn>
+                          <Btn small variant="outline" onClick={() => setEditingCardId(null)}>✕ Cancelar</Btn>
+                        </div>
+                      </div>
+                    ) : (
+                      <span key={c.id} className="tag" style={{ alignSelf: "flex-start" }}>
+                        {c.name} · {c.owner}{c.closing_day ? ` · cierra el ${c.closing_day}` : ""}
+                        <button onClick={() => startEditCard(c)} title="Editar">✏</button>
+                        <button onClick={() => removeCard(c)}>×</button>
+                      </span>
+                    )
+                  ))}
                   {cards.length === 0 && <span className="muted small">Sin tarjetas cargadas.</span>}
                 </div>
               </Card>
