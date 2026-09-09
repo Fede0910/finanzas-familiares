@@ -219,6 +219,24 @@ function computeProjectedRealGain(loan, remainingSchedule, collectedNominal, rea
   return { avgMonthly, nominalGain: totalNominal - principal, realGain: totalReal - principal };
 }
 
+// Marca cada cuota de un cronograma (computeLoanSchedule) como pagada o no, según lo efectivamente
+// cobrado hasta ahora en total (loan_payments), contado en orden desde el desembolso. Un pago hecho
+// unos días antes de la fecha "oficial" de la cuota igual la cuenta como saldada -- si no, esa
+// misma cuota volvía a aparecer como pendiente y se podía pagar dos veces por error. Si se cobró de
+// más contra una cuota (paga 480 debiendo 400), el excedente no alcanza para dar por pagada la
+// cuota siguiente completa, pero sí queda reflejado en el saldo pendiente real (collected), que es
+// lo que ya usan "Cuotas restantes" y la ganancia proyectada para acortar el plazo/intereses.
+function annotatePaidInstallments(schedule, collected) {
+  let remaining = collected;
+  let stillPaying = true;
+  return schedule.rows.map((r) => {
+    if (r.inGrace || !stillPaying) return { ...r, isPaid: false };
+    if (remaining + 0.01 >= r.payment) { remaining -= r.payment; return { ...r, isPaid: true }; }
+    stillPaying = false;
+    return { ...r, isPaid: false };
+  });
+}
+
 // Tasas de préstamos personales relevadas manualmente (no hay API pública confiable para esto).
 // Sirven como referencia para elegir una TNA intermedia al otorgar un préstamo — no son una
 // cotización exacta, varían por banco, perfil crediticio y momento.
@@ -1813,13 +1831,17 @@ export default function App() {
     }).filter((x) => x.amount > 0);
   }, [loans, loanCollectedById, reportMonth]);
   const selectedLoanForPay = loans.find((l) => String(l.id) === String(loanPayForm.loanId));
+  // Chips de "cuotas a pagar": cuotas del cronograma ORIGINAL (desde el desembolso) que todavía no
+  // están cubiertas por lo cobrado hasta ahora. Antes proyectaba de nuevo desde "hoy" con el saldo
+  // pendiente, así que la cuota recién pagada (si se paga unos días antes de su fecha "oficial")
+  // volvía a aparecer como la próxima a cobrar -- dejando pagarla dos veces por error.
   const loanForwardScheduleForPay = useMemo(() => {
     if (!selectedLoanForPay) return null;
-    const pending = Math.max(0, Number(selectedLoanForPay.principal || 0) - (loanCollectedById[selectedLoanForPay.id] || 0));
-    // Mantiene la cuota original del préstamo (no la recalcula para el plazo de alta) y proyecta
-    // cuántos períodos hacen falta desde el saldo real pendiente.
-    const originalInstallment = computeLoanSchedule(selectedLoanForPay).installment;
-    return computeLoanSchedule(selectedLoanForPay, { principal: pending, startDate: today(), graceMonths: 0, installment: originalInstallment });
+    const collected = loanCollectedById[selectedLoanForPay.id] || 0;
+    const base = computeLoanSchedule(selectedLoanForPay);
+    const annotated = annotatePaidInstallments(base, collected);
+    const upcoming = annotated.filter((r) => r.payment > 0 && !r.isPaid).map((r, i) => ({ ...r, period: i + 1 }));
+    return { installment: base.installment, rows: upcoming, estimatedTerm: upcoming.length, canCancel: base.canCancel };
   }, [selectedLoanForPay, loanCollectedById]);
 
   // Simulación en vivo del préstamo a otorgar: se calcula 100% en el cliente a partir de lo tipeado
@@ -3306,6 +3328,7 @@ export default function App() {
                 const pending = Math.max(0, Number(loan.principal || 0) - collected);
                 const pct = loan.principal > 0 ? (collected / loan.principal) * 100 : 0;
                 const schedule = computeLoanSchedule(loan); // plan original, desde el desembolso
+                const scheduleRowsAnnotated = annotatePaidInstallments(schedule, collected); // + isPaid por cuota
                 const remaining = computeLoanSchedule(loan, { principal: pending, startDate: today(), graceMonths: 0, installment: schedule.installment }); // real, desde hoy, misma cuota
                 const realCollected = loanPayments.filter((p) => p.loanId === loan.id).reduce((sum, p) => sum + Number(p.amount || 0) / ipcFactorBetween(ipcData, loan.startDate, p.date), 0);
                 const projectedGain = computeProjectedRealGain(loan, remaining, collected, realCollected, ipcData);
@@ -3372,16 +3395,18 @@ export default function App() {
                               <th style={{ textAlign: "right", padding: "4px 8px" }}>Interés</th>
                               <th style={{ textAlign: "right", padding: "4px 8px" }}>Cuota planificada</th>
                               <th style={{ textAlign: "right", padding: "4px 8px" }}>Saldo</th>
+                              <th style={{ textAlign: "right", padding: "4px 8px" }}>Estado</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {schedule.rows.slice(0, 36).map((r) => (
-                              <tr key={r.period} style={{ borderBottom: "1px solid var(--border)" }}>
+                            {scheduleRowsAnnotated.slice(0, 36).map((r) => (
+                              <tr key={r.period} style={{ borderBottom: "1px solid var(--border)", opacity: r.isPaid ? 0.6 : 1 }}>
                                 <td style={{ padding: "4px 8px" }}>{r.inGrace ? <span className="muted">Gracia</span> : r.installmentNo}</td>
                                 <td style={{ textAlign: "right", padding: "4px 8px" }}>{r.date}</td>
                                 <td style={{ textAlign: "right", padding: "4px 8px" }} className="muted">{fmtArs(r.interest)}</td>
                                 <td style={{ textAlign: "right", padding: "4px 8px" }}>{fmtArs(r.payment)}</td>
                                 <td style={{ textAlign: "right", padding: "4px 8px" }} className="fw">{fmtArs(r.closingBalance)}</td>
+                                <td style={{ textAlign: "right", padding: "4px 8px" }}>{r.isPaid ? <Badge color="green">✓ Pagada</Badge> : (r.inGrace ? "—" : <span className="muted small">Pendiente</span>)}</td>
                               </tr>
                             ))}
                           </tbody>
