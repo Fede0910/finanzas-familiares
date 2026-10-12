@@ -335,7 +335,9 @@ function computeMenuPos(btnRect, minWidth, preferredMaxHeight) {
     return { top: btnRect.bottom + 4, left, width, maxHeight: Math.max(80, Math.min(preferredMaxHeight, spaceBelow)) };
   }
   const maxHeight = Math.max(80, Math.min(preferredMaxHeight, spaceAbove));
-  return { top: btnRect.top - 4 - maxHeight, left, width, maxHeight };
+  // Anclado por el borde de abajo: si se calculara el `top` con maxHeight, una lista corta (pocas
+  // opciones) quedaba flotando lejos por encima del campo, con un hueco enorme en el medio.
+  return { bottom: window.innerHeight - btnRect.top + 4, left, width, maxHeight };
 }
 
 // Reemplaza el <select> nativo por una lista propia. En mobile, el <select> nativo abre un picker
@@ -406,7 +408,7 @@ function Select({ value, onChange, children, disabled = false, className = "" })
         <div
           ref={menuRef}
           style={{
-            position: "fixed", top: pos.top, left: pos.left, width: pos.width, zIndex: 1000,
+            position: "fixed", top: pos.top, bottom: pos.bottom, left: pos.left, width: pos.width, zIndex: 1000,
             background: "var(--surface-2)", border: "1.5px solid var(--border)", borderRadius: 10,
             boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: pos.maxHeight, overflowY: "auto",
           }}
@@ -502,7 +504,7 @@ function MonthMultiSelect({ value, onChange, months, className = "" }) {
         <div
           ref={menuRef}
           style={{
-            position: "fixed", top: pos.top, left: pos.left, width: pos.width, zIndex: 1000,
+            position: "fixed", top: pos.top, bottom: pos.bottom, left: pos.left, width: pos.width, zIndex: 1000,
             background: "var(--surface-2)", border: "1.5px solid var(--border)", borderRadius: 10,
             boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: pos.maxHeight, overflowY: "auto",
           }}
@@ -589,7 +591,7 @@ function MonthSelect({ value, onChange, months, className = "" }) {
         <div
           ref={menuRef}
           style={{
-            position: "fixed", top: pos.top, left: pos.left, width: pos.width, zIndex: 1000,
+            position: "fixed", top: pos.top, bottom: pos.bottom, left: pos.left, width: pos.width, zIndex: 1000,
             background: "var(--surface-2)", border: "1.5px solid var(--border)", borderRadius: 10,
             boxShadow: "0 4px 16px rgba(0,0,0,.35)", maxHeight: pos.maxHeight, overflowY: "auto",
           }}
@@ -747,7 +749,7 @@ function DescriptionAutocomplete({ value, onChange, suggestions }) {
 }
 
 // Panel de edición completo de un movimiento (todos los campos, no solo importe/detalle).
-function MovementEditPanel({ data, onChange, types, categoryMap, subcategoryMap, categoryIdFor, people, cards, onSave, onCancel }) {
+function MovementEditPanel({ data, onChange, types, categoryMap, subcategoryMap, categoryIdFor, people, cards, onSave, onCancel, groupMates = [], applyToGroup = false, onApplyToGroupChange }) {
   return (
     <div className="form-grid" style={{ margin: "8px 0", padding: 10, background: "var(--surface-2)", borderRadius: 10 }}>
       <Field label="Fecha"><Input type="date" value={data.date} onChange={(e) => onChange({ ...data, date: e.target.value })} /></Field>
@@ -777,11 +779,17 @@ function MovementEditPanel({ data, onChange, types, categoryMap, subcategoryMap,
           </Select>
         </Field>
       )}
+      {groupMates.length > 0 && (
+        <label style={{ gridColumn: "1 / -1", display: "flex", gap: 8, alignItems: "center", cursor: "pointer", fontSize: "0.88rem" }}>
+          <input type="checkbox" checked={applyToGroup} onChange={(e) => onApplyToGroupChange(e.target.checked)} />
+          <span>🤝 Aplicar el cambio también a la parte de <strong>{groupMates.join(", ")}</strong> (gasto compartido). Cada uno conserva su persona; fecha, categoría, detalle, importe y medio de pago se igualan.</span>
+        </label>
+      )}
       <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
         <Btn small onClick={onSave}>✓ Guardar</Btn>
         <Btn small variant="outline" onClick={onCancel}>✕ Cancelar</Btn>
       </div>
-      <div className="muted small" style={{ gridColumn: "1 / -1" }}>Nota: esto edita solo este movimiento. Si es parte de una compra en cuotas, cambiar acá no reparte el cambio al resto de las cuotas.</div>
+      <div className="muted small" style={{ gridColumn: "1 / -1" }}>Nota: {groupMates.length > 0 && applyToGroup ? "se edita este movimiento y los del gasto compartido (de esa misma cuota)." : "esto edita solo este movimiento."} Si es parte de una compra en cuotas, cambiar acá no reparte el cambio al resto de las cuotas.</div>
     </div>
   );
 }
@@ -827,6 +835,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editingMovId, setEditingMovId] = useState(null);
+  const [editApplyToGroup, setEditApplyToGroup] = useState(true);
   const [editMovData, setEditMovData] = useState({ date: "", person: "", type: "", category: "", subcategoryId: "", description: "", currency: "ARS", originalAmount: "", paymentMethod: "", cardId: "" });
 
   // "Mes global": uno o más meses. Las vistas que solo tienen sentido para UN mes (Dashboard,
@@ -1383,8 +1392,15 @@ export default function App() {
     setSaving(false);
   }
 
+  // Otros movimientos del mismo gasto compartido (misma compra, misma cuota), sin contar el propio.
+  function groupMatesOf(m) {
+    if (!m?.sharedGroupId) return [];
+    return movements.filter((x) => x.sharedGroupId === m.sharedGroupId && x.id !== m.id);
+  }
+
   function startEditMovement(m) {
     setEditingMovId(m.id);
+    setEditApplyToGroup(true);
     setEditMovData({
       date: m.date, person: m.person, type: m.type, category: m.category,
       subcategoryId: m.subcategoryId ? String(m.subcategoryId) : "", description: m.description || "",
@@ -1404,20 +1420,33 @@ export default function App() {
     const amountUsd = editMovData.currency === "USD" ? newAmount : amountArs / Math.max(blueRate, 1);
     const subcategoryId = editMovData.subcategoryId ? Number(editMovData.subcategoryId) : null;
     const cardId = editMovData.paymentMethod === "Tarjeta" && editMovData.cardId ? Number(editMovData.cardId) : null;
-    const { error } = await supabase.from("movements").update({
-      movement_date: editMovData.date, person: editMovData.person, type: editMovData.type, category: editMovData.category,
+    // Campos que se igualan en todo el gasto compartido (cada movimiento conserva su propia persona).
+    const sharedFields = {
+      movement_date: editMovData.date, type: editMovData.type, category: editMovData.category,
       subcategory_id: subcategoryId, description: editMovData.description || null,
       original_currency: editMovData.currency, original_amount: newAmount, fx_rate: rate,
       amount_ars: amountArs, amount_usd: amountUsd,
       payment_method: editMovData.paymentMethod || null, card_id: cardId,
-    }).eq("id", id);
+    };
+    // Los de meses ya cerrados no se tocan.
+    const mateIds = editApplyToGroup
+      ? groupMatesOf(mov).filter((x) => !monthlyBalances.some((b) => b.closed && b.balance_month === monthKey(x.date))).map((x) => x.id)
+      : [];
+    const { error } = await supabase.from("movements").update({ ...sharedFields, person: editMovData.person }).eq("id", id);
+    let mateError = null;
+    if (!error && mateIds.length) {
+      ({ error: mateError } = await supabase.from("movements").update(sharedFields).in("id", mateIds));
+    }
     if (!error) {
-      setMovements((prev) => prev.map((m) => m.id === id ? {
-        ...m, date: editMovData.date, person: editMovData.person, type: editMovData.type, category: editMovData.category,
+      const patch = {
+        date: editMovData.date, type: editMovData.type, category: editMovData.category,
         subcategoryId, description: editMovData.description, currency: editMovData.currency, originalAmount: newAmount,
         fxRate: rate, amountArs, amountUsd, paymentMethod: editMovData.paymentMethod || null, cardId,
-      } : m));
+      };
+      const mates = new Set(mateError ? [] : mateIds);
+      setMovements((prev) => prev.map((m) => m.id === id ? { ...m, ...patch, person: editMovData.person } : mates.has(m.id) ? { ...m, ...patch } : m));
     }
+    if (mateError) window.alert("Se guardó este movimiento, pero no se pudo actualizar el resto del gasto compartido. Revisalo en Datos.");
     setEditingMovId(null);
   }
 
@@ -2468,22 +2497,21 @@ export default function App() {
                 return (
                   // Fila propia (no .budget-inline-row): ese layout reserva una columna angosta de
                   // 150px para el texto, que acá queda muy apretado con todo el detalle de la serie.
-                  <div key={s.id} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "9px 0", borderBottom: "1px solid var(--border)" }}>
-                    <div>
-                      <span className="fw" style={{ fontSize: "0.92rem" }}>
+                  <div key={s.id} style={{ display: "flex", gap: "2px 12px", alignItems: "center", flexWrap: "wrap", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+                    {/* Título y detalle seguidos en el mismo bloque (se cortan en una segunda línea
+                        solo si no entran); a la derecha, "hasta" + controles, todo compacto. */}
+                    <div style={{ flex: "1 1 260px", minWidth: 0, lineHeight: 1.3 }}>
+                      <span className="fw" style={{ fontSize: "0.9rem" }}>
                         {s.kind === "tarjeta_cuotas" ? "💳" : "🔁"} {s.category}
                         {s.subcategory_id && subcategoryNameById[s.subcategory_id] ? ` · ${subcategoryNameById[s.subcategory_id]}` : ""}
                       </span>
-                      <div className="muted small" style={{ marginTop: 2 }}>
-                        {s.person} · {money(s.installment_amount, s.currency)}{s.kind === "tarjeta_cuotas" ? ` · cuota ${Math.max(0, (s.installments_total || 0) - pending)}/${s.installments_total} · ${cardNameById[s.card_id] || "tarjeta"}` : ` · día ${s.day_of_month}`} · desde {s.start_date}
-                      </div>
+                      <span className="muted small">
+                        {" · "}{s.person} · {money(s.installment_amount, s.currency)}{s.kind === "tarjeta_cuotas" ? ` · cuota ${Math.max(0, (s.installments_total || 0) - pending)}/${s.installments_total} · ${cardNameById[s.card_id] || "tarjeta"}` : ` · día ${s.day_of_month}`} · desde {s.start_date}
+                      </span>
                     </div>
-                    {/* "Hasta cuándo" con los controles para cambiarlo/cortarlo, todo a la misma
-                        altura -- antes el detalle terminaba en una fecha fija de texto y las
-                        acciones para cambiarla quedaban en una fila aparte, abajo. */}
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", flex: "0 0 auto" }}>
                       <span className="muted small">hasta</span>
-                      <Input type="date" value={seriesEndDateInputs[s.id] || s.end_date} onChange={(e) => setSeriesEndDateInputs((p) => ({ ...p, [s.id]: e.target.value }))} />
+                      <input type="date" className="control" style={{ width: 136, padding: "3px 6px", fontSize: "0.82rem" }} value={seriesEndDateInputs[s.id] || s.end_date} onChange={(e) => setSeriesEndDateInputs((p) => ({ ...p, [s.id]: e.target.value }))} />
                       <Btn small variant="outline" onClick={() => truncateSeries(s, seriesEndDateInputs[s.id] || s.end_date)}>Definir fin</Btn>
                       <button className="del-btn" onClick={() => deleteSeries(s)}>🗑</button>
                     </div>
@@ -2759,6 +2787,7 @@ export default function App() {
                                   data={editMovData} onChange={setEditMovData} types={types} categoryMap={categoryMap}
                                   subcategoryMap={subcategoryMap} categoryIdFor={categoryIdFor} people={people} cards={cards}
                                   onSave={() => saveEditMovement(m.id)} onCancel={() => setEditingMovId(null)}
+                                  groupMates={groupMatesOf(m).map((x) => x.person)} applyToGroup={editApplyToGroup} onApplyToGroupChange={setEditApplyToGroup}
                                 />
                               </td>
                             </tr>
@@ -2807,6 +2836,7 @@ export default function App() {
                           data={editMovData} onChange={setEditMovData} types={types} categoryMap={categoryMap}
                           subcategoryMap={subcategoryMap} categoryIdFor={categoryIdFor} people={people} cards={cards}
                           onSave={() => saveEditMovement(m.id)} onCancel={() => setEditingMovId(null)}
+                                  groupMates={groupMatesOf(m).map((x) => x.person)} applyToGroup={editApplyToGroup} onApplyToGroupChange={setEditApplyToGroup}
                         />
                       )}
                     </div>
