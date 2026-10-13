@@ -97,6 +97,30 @@ function mapMovementRow(m) {
 
 const daysInMonth = (year, month) => new Date(year, month, 0).getDate(); // month: 1-12
 
+// Ajustes de saldo ("corrección del mes"): cuentan en el saldo pero no en los indicadores (resultado,
+// punto de equilibrio, gastos por categoría...), así una diferencia de caja no distorsiona el análisis.
+const CORRECTION_CATEGORIES = ["Ing. no regist.", "Egr. no regist."];
+const isCorrection = (m) => CORRECTION_CATEGORIES.includes(m.category);
+
+// Resúmenes de tarjeta: cada cierre cubre desde el día siguiente al cierre anterior hasta el día de
+// cierre inclusive (misma regla que usa la carga de cuotas: una compra después del cierre va al próximo).
+const prevMonthKey = (mk) => {
+  const [y, m] = mk.split("-").map(Number);
+  const d = new Date(y, m - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+};
+const closingDateOf = (mk, closingDay) => {
+  const [y, m] = mk.split("-").map(Number);
+  return `${mk}-${String(Math.min(closingDay, daysInMonth(y, m))).padStart(2, "0")}`;
+};
+const addDaysIso = (iso, n) => {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const isoToDmy = (iso) => (iso ? iso.split("-").reverse().join("/") : "");
+const isoToDm = (iso) => (iso ? iso.split("-").reverse().slice(0, 2).join("/") : "");
+
 // Genera `count` fechas mensuales consecutivas a partir del mes de startDate, ancladas al día dayOfMonth
 // (recortado al último día válido de cada mes, ej. día 31 en febrero -> 28).
 function generateSeriesDates(startDate, dayOfMonth, count) {
@@ -888,14 +912,16 @@ export default function App() {
     currency: "ARS", amount: "", dayOfMonth: "10", startDate: today(),
   });
   const [seriesEndDateInputs, setSeriesEndDateInputs] = useState({}); // seriesId -> fecha elegida para truncar
-  const [reconcileForm, setReconcileForm] = useState({ cardId: "", month: currentMonth(), statementTotal: "" });
+  const [reconcileForm, setReconcileForm] = useState({ cardId: "", closing: "", statementTotal: "", paymentDate: "" });
+  const [cardStatements, setCardStatements] = useState([]); // cierres de tarjeta guardados (total del resumen, fecha de pago, pagado)
+  const [correctionForm, setCorrectionForm] = useState({ month: currentMonth(), person: "Federico", amount: "", note: "" });
   const [copyBudgetMsg, setCopyBudgetMsg] = useState("");
 
   useEffect(() => {
     async function load() {
       setLoading(true);
       try {
-        const [movsR, dbsR, dpsR, glsR, bgsR, mbsR, catsR, categoriesR, subcatsR, cardsR, seriesR, loansR, loanPaysR] = await Promise.all([
+        const [movsR, dbsR, dpsR, glsR, bgsR, mbsR, catsR, categoriesR, subcatsR, cardsR, seriesR, loansR, loanPaysR, cardStmtsR] = await Promise.all([
           supabase.from("movements").select("*").order("movement_date", { ascending: false }),
           supabase.from("debts").select("*").order("created_at", { ascending: false }),
           supabase.from("debt_payments").select("*").order("payment_date", { ascending: false }),
@@ -909,6 +935,7 @@ export default function App() {
           supabase.from("movement_series").select("*").eq("active", true).order("created_at", { ascending: false }),
           supabase.from("loans").select("*").order("created_at", { ascending: false }),
           supabase.from("loan_payments").select("*").order("payment_date", { ascending: false }),
+          supabase.from("card_statements").select("*"),
         ]);
 
         const movs = movsR.data || [];
@@ -928,6 +955,7 @@ export default function App() {
         setMovements(movs.map(mapMovementRow));
         setSubcategoryRows(subcats);
         setCards(cardsData);
+        setCardStatements(cardStmtsR.data || []);
         setMovementSeries(seriesData);
         setLoans(loansData.map((l) => ({
           id: l.id, name: l.name, owner: l.owner, principal: l.principal, annualRate: l.annual_rate,
@@ -1048,14 +1076,6 @@ export default function App() {
     return map;
   }, [cards]);
 
-  const reconcileMovements = useMemo(() => {
-    if (!reconcileForm.cardId) return [];
-    return movements
-      .filter((m) => String(m.cardId) === String(reconcileForm.cardId) && monthKey(m.date) === reconcileForm.month)
-      .sort((a, b) => a.date.localeCompare(b.date));
-  }, [movements, reconcileForm.cardId, reconcileForm.month]);
-  const reconcileSum = useMemo(() => reconcileMovements.reduce((a, m) => a + Number(m.amountArs || 0), 0), [reconcileMovements]);
-  const reconcileDiff = reconcileForm.statementTotal !== "" ? Number(reconcileForm.statementTotal) - reconcileSum : null;
   const amountDisplay = useCallback((m) => displayCurrency === "USD" ? Number(m.amountUsd || 0) : Number(m.amountArs || 0), [displayCurrency]);
   const fmt = useCallback((value) => money(value, displayCurrency), [displayCurrency]);
   const fmtArs = useCallback((value) => money(value, "ARS"), []);
@@ -1352,13 +1372,13 @@ export default function App() {
   // (mayormente impuestos) como un gasto en la categoría "Impuestos Tarjetas".
   async function registerCardDifference() {
     const cardId = Number(reconcileForm.cardId);
-    if (!cardId || reconcileDiff === null || reconcileDiff <= 0) return;
+    if (!cardId || !reconcileForm.closing || reconcileDiff === null || reconcileDiff <= 0) return;
     setSaving(true);
-    const [y, m] = reconcileForm.month.split("-").map(Number);
-    const date = `${reconcileForm.month}-${String(daysInMonth(y, m)).padStart(2, "0")}`;
+    // Fechado en el día de cierre: así queda dentro del período del resumen que se está conciliando.
+    const date = reconcileForm.closing;
     const row = {
       movement_date: date, person: "Federico", type: "Egreso", category: "Impuestos Tarjetas",
-      subcategory_id: null, description: `Diferencia resumen · ${cardNameById[cardId] || "tarjeta"} · ${reconcileForm.month}`,
+      subcategory_id: null, description: `Diferencia resumen · ${cardNameById[cardId] || "tarjeta"} · cierre ${isoToDmy(reconcileForm.closing)}`,
       original_currency: "ARS", original_amount: reconcileDiff, fx_rate: 1, amount_ars: reconcileDiff,
       amount_usd: reconcileDiff / Math.max(blueRate, 1), payment_method: "Tarjeta",
       linked_debt_id: null, linked_goal_id: null, card_id: cardId,
@@ -1366,7 +1386,57 @@ export default function App() {
     const { data, error } = await supabase.from("movements").insert([row]).select().single();
     if (!error && data) {
       setMovements((prev) => [mapMovementRow(data), ...prev]);
-      setReconcileForm((f) => ({ ...f, statementTotal: "" }));
+      // Se guarda el total del resumen para que no haya que volver a tipearlo al marcar el pago.
+      await saveCardStatement(cardId, reconcileForm.closing, { statement_total: Number(reconcileForm.statementTotal) });
+    }
+    setSaving(false);
+  }
+
+  // Alta/actualización del registro de un cierre (total del resumen, fecha de pago, pagado).
+  async function saveCardStatement(cardId, closing, fields) {
+    const existing = statementFor(cardId, closing);
+    const row = existing
+      ? { ...fields }
+      : { card_id: cardId, closing_date: closing, paid: false, ...fields };
+    const query = existing
+      ? supabase.from("card_statements").update(row).eq("id", existing.id)
+      : supabase.from("card_statements").insert([row]);
+    const { data, error } = await query.select().single();
+    if (error || !data) { window.alert("No se pudo guardar el cierre de la tarjeta. Probá de nuevo."); return null; }
+    setCardStatements((prev) => existing ? prev.map((s) => s.id === data.id ? data : s) : [...prev, data]);
+    return data;
+  }
+
+  // Marca un cierre como pagado (con fecha de pago, si se la conoce) o deshace el pago. Pagar un
+  // resumen NO crea un egreso: los consumos ya se contaron el día de cada compra.
+  async function setStatementPaid(cardId, closing, paid, paymentDate) {
+    const fields = { paid, payment_date: paid ? (paymentDate || null) : null };
+    if (paid && closing === reconcileForm.closing && reconcileForm.statementTotal !== "") fields.statement_total = Number(reconcileForm.statementTotal);
+    await saveCardStatement(cardId, closing, fields);
+  }
+
+  // Corrección del mes: la diferencia entre el saldo real y el de la app. Positiva = ingreso no
+  // registrado, negativa = egreso no registrado. Fechada el último día del mes que se está viendo.
+  async function addMonthCorrection() {
+    const diff = Number(String(correctionForm.amount).replace(/\./g, "").replace(",", "."));
+    if (!diff || Number.isNaN(diff)) return;
+    const month = correctionForm.month;
+    if (monthlyBalances.some((b) => b.closed && b.balance_month === month)) { window.alert("Ese mes está cerrado."); return; }
+    setSaving(true);
+    const [y, m] = month.split("-").map(Number);
+    const abs = Math.abs(diff);
+    const positive = diff > 0;
+    const row = {
+      movement_date: `${month}-${String(daysInMonth(y, m)).padStart(2, "0")}`, person: correctionForm.person,
+      type: positive ? "Ingreso" : "Egreso", category: positive ? "Ing. no regist." : "Egr. no regist.",
+      subcategory_id: null, description: correctionForm.note || `Corrección de saldo ${month}`,
+      original_currency: "ARS", original_amount: abs, fx_rate: 1, amount_ars: abs, amount_usd: abs / Math.max(blueRate, 1),
+      payment_method: null, linked_debt_id: null, linked_goal_id: null,
+    };
+    const { data, error } = await supabase.from("movements").insert([row]).select().single();
+    if (!error && data) {
+      setMovements((prev) => [mapMovementRow(data), ...prev]);
+      setCorrectionForm((f) => ({ ...f, amount: "", note: "" }));
     }
     setSaving(false);
   }
@@ -1861,6 +1931,49 @@ export default function App() {
   // Meses con al menos un movimiento cargado (de cualquier persona) — es lo que ofrece elegir
   // "Mes global", en vez de un rango ciego de fechas sin datos.
   const availableMonths = useMemo(() => [...new Set(movements.map((m) => monthKey(m.date)))], [movements]);
+
+  // Conciliación de tarjeta por CIERRE: lista de resúmenes (más reciente primero) de la tarjeta elegida,
+  // cada uno con su período [start, end]. Sin día de cierre configurado se usa el mes calendario.
+  const reconcileCard = useMemo(() => cards.find((c) => String(c.id) === String(reconcileForm.cardId)) || null, [cards, reconcileForm.cardId]);
+  const closingsForCard = useCallback((card) => {
+    if (!card) return [];
+    const cd = card.closing_day || 31;
+    const months = [...new Set([...availableMonths, currentMonth()])];
+    return months
+      .map((mk) => ({ end: closingDateOf(mk, cd), start: addDaysIso(closingDateOf(prevMonthKey(mk), cd), 1) }))
+      .sort((a, b) => b.end.localeCompare(a.end));
+  }, [availableMonths]);
+  const reconcileClosings = useMemo(() => closingsForCard(reconcileCard), [closingsForCard, reconcileCard]);
+  const reconcilePeriod = useMemo(() => reconcileClosings.find((c) => c.end === reconcileForm.closing) || null, [reconcileClosings, reconcileForm.closing]);
+  const cardMovementsIn = useCallback((cardId, period) =>
+    movements.filter((m) => String(m.cardId) === String(cardId) && m.date >= period.start && m.date <= period.end),
+  [movements]);
+  const reconcileMovements = useMemo(() => {
+    if (!reconcileCard || !reconcilePeriod) return [];
+    return cardMovementsIn(reconcileCard.id, reconcilePeriod).sort((a, b) => a.date.localeCompare(b.date));
+  }, [reconcileCard, reconcilePeriod, cardMovementsIn]);
+  const reconcileSum = useMemo(() => reconcileMovements.reduce((a, m) => a + Number(m.amountArs || 0), 0), [reconcileMovements]);
+  const reconcileDiff = reconcileForm.statementTotal !== "" ? Number(reconcileForm.statementTotal) - reconcileSum : null;
+  const statementFor = useCallback((cardId, closing) =>
+    cardStatements.find((s) => String(s.card_id) === String(cardId) && s.closing_date === closing) || null,
+  [cardStatements]);
+  const reconcileStatement = reconcileCard && reconcileForm.closing ? statementFor(reconcileCard.id, reconcileForm.closing) : null;
+  // Resumen de los cierres de la tarjeta: los ya pagados no suman a "pendiente de pago", así no se
+  // paga dos veces lo mismo. Sólo se listan cierres con movimientos (o un resumen guardado).
+  const reconcileOverview = useMemo(() => {
+    if (!reconcileCard) return { rows: [], pendingTotal: 0 };
+    const todayIso = today();
+    const rows = reconcileClosings
+      .map((c) => {
+        const st = statementFor(reconcileCard.id, c.end);
+        const sum = cardMovementsIn(reconcileCard.id, c).reduce((a, m) => a + Number(m.amountArs || 0), 0);
+        return { ...c, sum, statement: st, paid: !!st?.paid, closed: c.end <= todayIso };
+      })
+      .filter((r) => r.sum > 0 || r.statement)
+      .slice(0, 10);
+    const pendingTotal = rows.filter((r) => r.closed && !r.paid).reduce((a, r) => a + Number(r.statement?.statement_total ?? r.sum), 0);
+    return { rows, pendingTotal };
+  }, [reconcileCard, reconcileClosings, statementFor, cardMovementsIn]);
   const personMovements = useMemo(() => movements.filter((m) => selectedPerson === "all" || m.person === selectedPerson), [movements, selectedPerson]);
   const personDebts = useMemo(() => debts.filter((d) => selectedPerson === "all" || d.owner === selectedPerson), [debts, selectedPerson]);
   // Los préstamos son plata de la familia, no de una persona — se muestran siempre todos, sin
@@ -1986,7 +2099,7 @@ export default function App() {
   );
 
   const monthlyExpenseByFV = useMemo(() => {
-    const monthEgresos = personMovements.filter((m) => m.type === "Egreso" && monthKey(m.date) === reportMonth);
+    const monthEgresos = personMovements.filter((m) => m.type === "Egreso" && !isCorrection(m) && monthKey(m.date) === reportMonth);
     const fixedArs = monthEgresos.filter((m) => getFV(m.type, m.category) === "F").reduce((a, b) => a + b.amountArs, 0);
     const variableArs = monthEgresos.filter((m) => getFV(m.type, m.category) !== "F").reduce((a, b) => a + b.amountArs, 0);
     const fixed = displayCurrency === "USD" ? monthEgresos.filter((m) => getFV(m.type, m.category) === "F").reduce((a, b) => a + Number(b.amountUsd || 0), 0) : fixedArs;
@@ -1995,7 +2108,7 @@ export default function App() {
   }, [personMovements, reportMonth, displayCurrency, getFV]);
 
   const monthlyKpis = useMemo(() => {
-    const monthMovs = personMovements.filter((m) => monthKey(m.date) === reportMonth);
+    const monthMovs = personMovements.filter((m) => monthKey(m.date) === reportMonth && !isCorrection(m));
     const incomeArs = monthMovs.filter((m) => m.type === "Ingreso").reduce((a, b) => a + b.amountArs, 0);
     const income = displayCurrency === "USD" ? monthMovs.filter((m) => m.type === "Ingreso").reduce((a, b) => a + Number(b.amountUsd || 0), 0) : incomeArs;
     const fixedArs = monthlyExpenseByFV.fixedArs;
@@ -2018,7 +2131,7 @@ export default function App() {
 
   const annualByMonth = useMemo(() => {
     const bucket = {};
-    personMovements.forEach((m) => {
+    personMovements.filter((m) => !isCorrection(m)).forEach((m) => {
       const k = monthKey(m.date);
       if (!bucket[k]) bucket[k] = { month: k, income: 0, expenses: 0, fixed: 0, variable: 0 };
       const val = amountDisplay(m);
@@ -2034,7 +2147,7 @@ export default function App() {
 
   const monthlyByCategory = useMemo(() => {
     const bucket = {};
-    personMovements.filter((m) => m.type === "Egreso" && monthKey(m.date) === reportMonth).forEach((m) => {
+    personMovements.filter((m) => m.type === "Egreso" && !isCorrection(m) && monthKey(m.date) === reportMonth).forEach((m) => {
       bucket[m.category] = (bucket[m.category] || 0) + amountDisplay(m);
     });
     const total = Object.values(bucket).reduce((a, b) => a + b, 0);
@@ -2043,7 +2156,7 @@ export default function App() {
 
   const monthlyByPerson = useMemo(() => {
     const bucket = {};
-    movements.filter((m) => m.type === "Egreso" && monthKey(m.date) === reportMonth).forEach((m) => {
+    movements.filter((m) => m.type === "Egreso" && !isCorrection(m) && monthKey(m.date) === reportMonth).forEach((m) => {
       bucket[m.person] = (bucket[m.person] || 0) + amountDisplay(m);
     });
     const total = Object.values(bucket).reduce((a, b) => a + b, 0);
@@ -2522,35 +2635,93 @@ export default function App() {
 
             <Card>
               <CardHead title="Conciliación de resumen de tarjeta" icon="🧾" />
-              <p className="muted small" style={{ marginBottom: 12 }}>Elegí la tarjeta y el mes para ver qué cargaste. Si falta algo, cargalo en "Cargar". Cuando esté completo, poné el total del resumen del banco: la diferencia (mayormente impuestos) se registra sola como gasto en "Impuestos Tarjetas".</p>
+              <p className="muted small" style={{ marginBottom: 12 }}>Elegí la tarjeta y el cierre del resumen para ver qué cargaste en ese período. Si falta algo, cargalo en "Cargar". Cuando esté completo, poné el total del resumen del banco: la diferencia (mayormente impuestos, o algún gasto que falte cargar: revisalo) se registra como gasto en "Impuestos Tarjetas". Al pagar el resumen, marcalo como pagado para no pagarlo dos veces.</p>
               <div className="form-grid three-col">
                 <Field label="Tarjeta">
-                  <Select value={reconcileForm.cardId} onChange={(v) => setReconcileForm({ ...reconcileForm, cardId: v })}>
+                  <Select
+                    value={reconcileForm.cardId}
+                    onChange={(v) => {
+                      const card = cards.find((c) => String(c.id) === v);
+                      const list = closingsForCard(card);
+                      // Arranca en el último cierre ya ocurrido (el resumen que se está por pagar).
+                      const latestClosed = list.find((c) => c.end <= today()) || list[0];
+                      setReconcileForm({ cardId: v, closing: latestClosed ? latestClosed.end : "", statementTotal: "", paymentDate: "" });
+                    }}
+                  >
                     <option value="">Elegir tarjeta…</option>
                     {cards.map((c) => <option key={c.id} value={String(c.id)}>{c.name}{c.owner ? ` · ${c.owner}` : ""}</option>)}
                   </Select>
                 </Field>
-                <Field label="Mes"><MonthSelect value={reconcileForm.month} onChange={(v) => setReconcileForm({ ...reconcileForm, month: v })} months={availableMonths} /></Field>
+                <Field label="Cierre a pagar">
+                  <Select value={reconcileForm.closing} disabled={!reconcileCard} onChange={(v) => setReconcileForm({ ...reconcileForm, closing: v, statementTotal: "", paymentDate: "" })}>
+                    <option value="">{reconcileCard ? "Elegir cierre…" : "Primero elegí tarjeta"}</option>
+                    {reconcileClosings.map((c) => (
+                      <option key={c.end} value={c.end}>{`Cierre ${isoToDmy(c.end)} · ${isoToDm(c.start)} al ${isoToDm(c.end)}${statementFor(reconcileCard.id, c.end)?.paid ? " · ✓ pagado" : ""}`}</option>
+                    ))}
+                  </Select>
+                </Field>
                 <Field label="Total según resumen del banco"><MoneyInput value={reconcileForm.statementTotal} onChange={(e) => setReconcileForm({ ...reconcileForm, statementTotal: e.target.value })} placeholder="0" /></Field>
+                <Field label="Fecha de pago"><Input type="date" value={reconcileForm.paymentDate} onChange={(e) => setReconcileForm({ ...reconcileForm, paymentDate: e.target.value })} /></Field>
               </div>
-              {reconcileForm.cardId && (
+              {reconcileCard && !reconcileCard.closing_day && (
+                <InfoBox color="amber">Esta tarjeta no tiene día de cierre configurado, así que se usa el mes calendario y puede no coincidir con el resumen. Cargalo en Config → Tarjetas (✏).</InfoBox>
+              )}
+              {reconcileCard && reconcilePeriod && (
                 <>
-                  {reconcileMovements.length === 0 && <EmptyState msg="No hay movimientos cargados con esta tarjeta en ese mes." />}
+                  <div className="muted small" style={{ margin: "10px 0 4px" }}>Movimientos del {isoToDmy(reconcilePeriod.start)} al {isoToDmy(reconcilePeriod.end)}</div>
+                  {reconcileMovements.length === 0 && <EmptyState msg="No hay movimientos cargados con esta tarjeta en ese cierre." />}
                   {reconcileMovements.map((m) => (
                     <div key={m.id} className="report-row"><div>{m.date} · {m.category}{m.description ? ` · ${m.description}` : ""}</div><strong>{fmtArs(m.amountArs)}</strong></div>
                   ))}
                   <div className="report-row total"><div>Total cargado</div><strong>{fmtArs(reconcileSum)}</strong></div>
-                  {reconcileDiff !== null && (
+                  {reconcileStatement?.paid ? (
                     <>
-                      <InfoBox color={reconcileDiff > 0 ? "blue" : "amber"}>
-                        {reconcileDiff > 0
-                          ? <>Diferencia a registrar: <strong>{fmtArs(reconcileDiff)}</strong> (resumen − cargado).</>
-                          : <>El total cargado ya cubre o supera el resumen ({fmtArs(reconcileSum)} vs {fmtArs(Number(reconcileForm.statementTotal))}). Revisá que no haya algo duplicado antes de seguir.</>}
+                      <InfoBox color="green">
+                        ✓ Este cierre ya está <strong>pagado</strong>{reconcileStatement.payment_date ? <> el {isoToDmy(reconcileStatement.payment_date)}</> : null}
+                        {reconcileStatement.statement_total != null ? <> (resumen {fmtArs(Number(reconcileStatement.statement_total))})</> : null}. No suma a lo pendiente de pago.
                       </InfoBox>
                       <div style={{ marginTop: 12 }}>
-                        <Btn onClick={registerCardDifference} disabled={saving || reconcileDiff <= 0}>{saving ? "Guardando…" : "Registrar diferencia como gasto de tarjeta"}</Btn>
+                        <Btn variant="outline" onClick={() => setStatementPaid(reconcileCard.id, reconcileForm.closing, false)}>Deshacer pago</Btn>
                       </div>
                     </>
+                  ) : (
+                    <>
+                      {reconcileDiff !== null && (
+                        <InfoBox color={reconcileDiff > 0 ? "blue" : "amber"}>
+                          {reconcileDiff > 0
+                            ? <>Diferencia a registrar: <strong>{fmtArs(reconcileDiff)}</strong> (resumen − cargado).</>
+                            : reconcileDiff === 0
+                              ? <>El total cargado coincide con el resumen.</>
+                              : <>El total cargado supera el resumen ({fmtArs(reconcileSum)} vs {fmtArs(Number(reconcileForm.statementTotal))}). Revisá que no haya algo duplicado antes de seguir.</>}
+                        </InfoBox>
+                      )}
+                      <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {reconcileDiff !== null && (
+                          <Btn onClick={registerCardDifference} disabled={saving || reconcileDiff <= 0}>{saving ? "Guardando…" : "Registrar diferencia como gasto de tarjeta"}</Btn>
+                        )}
+                        <Btn variant="outline" onClick={() => setStatementPaid(reconcileCard.id, reconcileForm.closing, true, reconcileForm.paymentDate || today())}>✓ Marcar cierre como pagado</Btn>
+                      </div>
+                    </>
+                  )}
+
+                  {reconcileOverview.rows.length > 0 && (
+                    <div style={{ marginTop: 18 }}>
+                      <div className="fw" style={{ fontSize: "0.9rem", marginBottom: 4 }}>Cierres de {reconcileCard.name}</div>
+                      {reconcileOverview.rows.map((r) => (
+                        <div key={r.end} className="report-row" style={{ gap: 8, alignItems: "center", opacity: r.paid ? 0.65 : 1 }}>
+                          <div
+                            style={{ cursor: "pointer", flex: 1 }}
+                            onClick={() => setReconcileForm((f) => ({ ...f, closing: r.end, statementTotal: "", paymentDate: "" }))}
+                            title="Ver este cierre"
+                          >
+                            Cierre {isoToDmy(r.end)} <span className="muted small">· {isoToDm(r.start)} al {isoToDm(r.end)}{r.paid ? ` · pagado${r.statement.payment_date ? ` el ${isoToDmy(r.statement.payment_date)}` : ""}` : r.closed ? " · pendiente de pago" : " · abierto"}</span>
+                          </div>
+                          <strong style={r.paid ? { textDecoration: "line-through" } : undefined}>{fmtArs(Number(r.statement?.statement_total ?? r.sum))}</strong>
+                          {r.closed && !r.paid && <Btn small variant="outline" onClick={() => setStatementPaid(reconcileCard.id, r.end, true, null)}>✓ Pagado</Btn>}
+                        </div>
+                      ))}
+                      <div className="report-row total"><div>Pendiente de pago (cierres ya cerrados, sin pagar)</div><strong>{fmtArs(reconcileOverview.pendingTotal)}</strong></div>
+                    </div>
                   )}
                 </>
               )}
@@ -2897,6 +3068,37 @@ export default function App() {
                       </InfoBox>
                     )}
                     <div style={{ marginTop: 12 }}><Btn onClick={saveBalance}>Guardar saldo inicial</Btn></div>
+                  </>
+                );
+              })()}
+            </Card>
+
+            <Card>
+              <div
+                style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none" }}
+                onClick={() => setExpandedTypes((p) => ({ ...p, _correccion: !p._correccion }))}
+              >
+                <CardHead title="Corrección del mes" icon="⚖️" />
+                <span className="muted small" style={{ paddingRight: 4 }}>{expandedTypes._correccion ? "▲ ocultar" : "▼ abrir"}</span>
+              </div>
+              {expandedTypes._correccion && (() => {
+                const closing = computeMonthBalance(correctionForm.month).closing;
+                const diff = Number(String(correctionForm.amount).replace(/\./g, "").replace(",", "."));
+                const valid = !!diff && !Number.isNaN(diff);
+                return (
+                  <>
+                    <p className="muted small" style={{ marginBottom: 12 }}>Para que el saldo de la app coincida con el real. Poné la diferencia (real − app): si es positiva se registra como ingreso (<strong>Ing. no regist.</strong>) y si es negativa como egreso (<strong>Egr. no regist.</strong>). Ajusta el saldo pero no entra en los indicadores (resultado, punto de equilibrio, gastos por categoría).</p>
+                    <div className="form-grid three-col">
+                      <Field label="Mes"><MonthSelect value={correctionForm.month} onChange={(v) => setCorrectionForm({ ...correctionForm, month: v })} months={availableMonths} /></Field>
+                      <Field label="Persona"><Select value={correctionForm.person} onChange={(v) => setCorrectionForm({ ...correctionForm, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+                      <Field label="Diferencia (ARS, con − si falta plata)"><input type="text" inputMode="decimal" className="control" value={correctionForm.amount} placeholder="Ej. -150000" onChange={(e) => setCorrectionForm({ ...correctionForm, amount: e.target.value.replace(/[^0-9.,-]/g, "") })} /></Field>
+                      <Field label="Nota (opcional)"><Input value={correctionForm.note} onChange={(e) => setCorrectionForm({ ...correctionForm, note: e.target.value })} placeholder="Ej. Efectivo no registrado" /></Field>
+                    </div>
+                    <InfoBox color={valid ? (diff > 0 ? "green" : "amber") : "blue"}>
+                      Saldo de la app al cierre de {correctionForm.month}: <strong>{fmtArs(closing)}</strong>
+                      {valid && <> · se registrará un <strong>{diff > 0 ? "ingreso" : "egreso"} no registrado</strong> de <strong>{fmtArs(Math.abs(diff))}</strong> y el saldo quedará en <strong>{fmtArs(closing + diff)}</strong>.</>}
+                    </InfoBox>
+                    <div style={{ marginTop: 12 }}><Btn onClick={addMonthCorrection} disabled={saving || !valid}>{saving ? "Guardando…" : "Registrar corrección"}</Btn></div>
                   </>
                 );
               })()}
