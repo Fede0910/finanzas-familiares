@@ -135,6 +135,24 @@ async function fetchAllRows(buildQuery) {
 const isoToDmy = (iso) => (iso ? iso.split("-").reverse().join("/") : "");
 const isoToDm = (iso) => (iso ? iso.split("-").reverse().slice(0, 2).join("/") : "");
 
+// Números como se escriben en el resumen del banco: "344.042,01" -> 344042.01. Sin coma, un punto
+// seguido de 1-2 dígitos se toma como decimal ("3401.11"); si no, los puntos son separadores de miles.
+const parseArNumber = (t) => {
+  let x = String(t ?? "").trim().replace(/\s/g, "");
+  if (!x) return null;
+  if (x.includes(",")) x = x.replace(/\./g, "").replace(",", ".");
+  else if (!/^\d+\.\d{1,2}$/.test(x)) x = x.replace(/\./g, "");
+  const n = Number(x);
+  return Number.isFinite(n) ? n : null;
+};
+// "Calculadora" de impuestos: suma varios importes separados por + , espacios o saltos de línea.
+const sumArNumbers = (t) => {
+  const nums = String(t ?? "").split(/[+;\s]+/).map(parseArNumber).filter((n) => n != null);
+  return nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) * 100) / 100 : null;
+};
+const round2 = (n) => Math.round(n * 100) / 100;
+const fmtArInput = (n) => (n == null || n === "" ? "" : Number(n).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+
 // Genera `count` fechas mensuales consecutivas a partir del mes de startDate, ancladas al día dayOfMonth
 // (recortado al último día válido de cada mes, ej. día 31 en febrero -> 28).
 function generateSeriesDates(startDate, dayOfMonth, count) {
@@ -926,7 +944,7 @@ export default function App() {
     currency: "ARS", amount: "", dayOfMonth: "10", startDate: today(),
   });
   const [seriesEndDateInputs, setSeriesEndDateInputs] = useState({}); // seriesId -> fecha elegida para truncar
-  const [reconcileForm, setReconcileForm] = useState({ cardId: "", closing: "", statementTotal: "", paymentDate: "" });
+  const [reconcileForm, setReconcileForm] = useState({ cardId: "", closing: "", statementTotal: "", statementUsd: "", taxesText: "", paymentDate: "" });
   const [cardStatements, setCardStatements] = useState([]); // cierres de tarjeta guardados (total del resumen, fecha de pago, pagado)
   const [correctionForm, setCorrectionForm] = useState({ month: currentMonth(), person: "Federico", amount: "", note: "" });
   const [copyBudgetMsg, setCopyBudgetMsg] = useState("");
@@ -1382,27 +1400,62 @@ export default function App() {
     setMovementSeries((prev) => prev.filter((s) => s.id !== series.id));
   }
 
-  // Conciliación de resumen de tarjeta: registra la diferencia entre lo cargado y el total del resumen
-  // (mayormente impuestos) como un gasto en la categoría "Impuestos Tarjetas".
-  async function registerCardDifference() {
+  // Elegir un resumen (cierre) de una tarjeta: carga en el formulario lo que ya se había guardado.
+  function selectClosing(cardId, key) {
+    const st = statementFor(cardId, key);
+    setReconcileForm({
+      cardId: String(cardId), closing: key,
+      statementTotal: fmtArInput(st?.statement_total), statementUsd: fmtArInput(st?.statement_usd),
+      taxesText: st?.taxes_ars != null ? fmtArInput(st.taxes_ars) : "", paymentDate: st?.payment_date || "",
+    });
+  }
+
+  // Guarda los datos del resumen que el usuario tipeó (totales en pesos y dólares, impuestos, pago).
+  async function saveStatementFields(extra = {}) {
     const cardId = Number(reconcileForm.cardId);
-    if (!cardId || !reconcileForm.closing || reconcileDiff === null || reconcileDiff <= 0) return;
-    setSaving(true);
-    // Fechado en el día de cierre: así queda dentro del período del resumen que se está conciliando.
-    const date = reconcileForm.closing;
-    const row = {
-      movement_date: date, person: "Federico", type: "Egreso", category: "Impuestos Tarjetas",
-      subcategory_id: null, description: `Diferencia resumen · ${cardNameById[cardId] || "tarjeta"} · cierre ${isoToDmy(reconcileForm.closing)}`,
-      original_currency: "ARS", original_amount: reconcileDiff, fx_rate: 1, amount_ars: reconcileDiff,
-      amount_usd: reconcileDiff / Math.max(blueRate, 1), payment_method: "Tarjeta",
-      linked_debt_id: null, linked_goal_id: null, card_id: cardId,
-    };
-    const { data, error } = await supabase.from("movements").insert([row]).select().single();
-    if (!error && data) {
-      setMovements((prev) => [mapMovementRow(data), ...prev]);
-      // Se guarda el total del resumen para que no haya que volver a tipearlo al marcar el pago.
-      await saveCardStatement(cardId, reconcileForm.closing, { statement_total: Number(reconcileForm.statementTotal) });
+    if (!cardId || !reconcileForm.closing) return null;
+    return saveCardStatement(cardId, reconcileForm.closing, {
+      statement_total: parseArNumber(reconcileForm.statementTotal),
+      statement_usd: parseArNumber(reconcileForm.statementUsd),
+      taxes_ars: sumArNumbers(reconcileForm.taxesText),
+      payment_date: reconcileForm.paymentDate || null,
+      ...extra,
+    });
+  }
+
+  // La fecha de cierre real cambia mes a mes: al cargarla cambia el período del resumen (y el inicio
+  // del siguiente), así cada compra cae en el resumen que le corresponde.
+  async function setRealClosingDate(date) {
+    const cardId = Number(reconcileForm.cardId);
+    if (!cardId || !reconcileForm.closing) return;
+    await saveCardStatement(cardId, reconcileForm.closing, { real_closing_date: date || null });
+  }
+
+  // Registra los impuestos del resumen como UN gasto en "Impuestos Tarjetas", fechado en el cierre.
+  // Si ese período ya tenía impuestos cargados, sólo agrega lo que falta para llegar al total tipeado.
+  async function registerCardTaxes() {
+    const cardId = Number(reconcileForm.cardId);
+    const { typedTaxes, registeredTaxes } = reconcileCheck;
+    if (!cardId || !reconcilePeriod || typedTaxes == null || typedTaxes <= 0) return;
+    const toAdd = round2(typedTaxes - registeredTaxes);
+    if (toAdd < 0) {
+      window.alert(`En este resumen ya hay $ ${fmtArInput(registeredTaxes)} de impuestos cargados, más que los $ ${fmtArInput(typedTaxes)} que indicás. Corregí o borrá el movimiento "Impuestos Tarjetas" en Datos.`);
+      return;
     }
+    setSaving(true);
+    if (toAdd > 0) {
+      const owner = people.includes(reconcileCard?.owner) ? reconcileCard.owner : "Federico";
+      const row = {
+        movement_date: reconcilePeriod.end, person: owner, type: "Egreso", category: "Impuestos Tarjetas",
+        subcategory_id: null, description: `Impuestos resumen · ${cardNameById[cardId] || "tarjeta"} · cierre ${isoToDmy(reconcilePeriod.end)}`,
+        original_currency: "ARS", original_amount: toAdd, fx_rate: 1, amount_ars: toAdd,
+        amount_usd: toAdd / Math.max(blueRate, 1), payment_method: "Tarjeta",
+        linked_debt_id: null, linked_goal_id: null, card_id: cardId,
+      };
+      const { data, error } = await supabase.from("movements").insert([row]).select().single();
+      if (!error && data) setMovements((prev) => [mapMovementRow(data), ...prev]);
+    }
+    await saveStatementFields();
     setSaving(false);
   }
 
@@ -1425,7 +1478,18 @@ export default function App() {
   // resumen NO crea un egreso: los consumos ya se contaron el día de cada compra.
   async function setStatementPaid(cardId, closing, paid, paymentDate) {
     const fields = { paid, payment_date: paid ? (paymentDate || null) : null };
-    if (paid && closing === reconcileForm.closing && reconcileForm.statementTotal !== "") fields.statement_total = Number(reconcileForm.statementTotal);
+    const isCurrent = closing === reconcileForm.closing;
+    if (paid && isCurrent) {
+      // Si lo que el banco cobra no coincide con lo cargado, avisar antes de dar el resumen por cerrado.
+      const { diffArs, diffUsd } = reconcileCheck;
+      if ((diffArs != null && Math.abs(diffArs) > 1) || (diffUsd != null && Math.abs(diffUsd) > 0.01)) {
+        if (!window.confirm("Este resumen todavía NO cuadra con lo cargado (puede faltar alguna compra). ¿Marcarlo como pagado igual?")) return;
+      }
+      Object.assign(fields, {
+        statement_total: parseArNumber(reconcileForm.statementTotal), statement_usd: parseArNumber(reconcileForm.statementUsd),
+        taxes_ars: sumArNumbers(reconcileForm.taxesText),
+      });
+    }
     await saveCardStatement(cardId, closing, fields);
   }
 
@@ -1949,16 +2013,26 @@ export default function App() {
   // Conciliación de tarjeta por CIERRE: lista de resúmenes (más reciente primero) de la tarjeta elegida,
   // cada uno con su período [start, end]. Sin día de cierre configurado se usa el mes calendario.
   const reconcileCard = useMemo(() => cards.find((c) => String(c.id) === String(reconcileForm.cardId)) || null, [cards, reconcileForm.cardId]);
+  const statementFor = useCallback((cardId, key) =>
+    cardStatements.find((s) => String(s.card_id) === String(cardId) && s.closing_date === key) || null,
+  [cardStatements]);
+  // `key` identifica el resumen (cierre "nominal" según el día configurado en la tarjeta); `end` es la
+  // fecha REAL de cierre si se la cargó (los bancos la mueven mes a mes: 10/09, 08/10, 05/11...) y
+  // `start` arranca el día siguiente al cierre real del resumen anterior.
   const closingsForCard = useCallback((card) => {
     if (!card) return [];
     const cd = card.closing_day || 31;
+    const effectiveEnd = (key) => statementFor(card.id, key)?.real_closing_date || key;
     const months = [...new Set([...availableMonths, currentMonth()])];
     return months
-      .map((mk) => ({ end: closingDateOf(mk, cd), start: addDaysIso(closingDateOf(prevMonthKey(mk), cd), 1) }))
-      .sort((a, b) => b.end.localeCompare(a.end));
-  }, [availableMonths]);
+      .map((mk) => {
+        const key = closingDateOf(mk, cd);
+        return { key, end: effectiveEnd(key), start: addDaysIso(effectiveEnd(closingDateOf(prevMonthKey(mk), cd)), 1) };
+      })
+      .sort((a, b) => b.key.localeCompare(a.key));
+  }, [availableMonths, statementFor]);
   const reconcileClosings = useMemo(() => closingsForCard(reconcileCard), [closingsForCard, reconcileCard]);
-  const reconcilePeriod = useMemo(() => reconcileClosings.find((c) => c.end === reconcileForm.closing) || null, [reconcileClosings, reconcileForm.closing]);
+  const reconcilePeriod = useMemo(() => reconcileClosings.find((c) => c.key === reconcileForm.closing) || null, [reconcileClosings, reconcileForm.closing]);
   const cardMovementsIn = useCallback((cardId, period) =>
     movements.filter((m) => String(m.cardId) === String(cardId) && m.date >= period.start && m.date <= period.end),
   [movements]);
@@ -1966,12 +2040,26 @@ export default function App() {
     if (!reconcileCard || !reconcilePeriod) return [];
     return cardMovementsIn(reconcileCard.id, reconcilePeriod).sort((a, b) => a.date.localeCompare(b.date));
   }, [reconcileCard, reconcilePeriod, cardMovementsIn]);
-  const reconcileSum = useMemo(() => reconcileMovements.reduce((a, m) => a + Number(m.amountArs || 0), 0), [reconcileMovements]);
-  const reconcileDiff = reconcileForm.statementTotal !== "" ? Number(reconcileForm.statementTotal) - reconcileSum : null;
-  const statementFor = useCallback((cardId, closing) =>
-    cardStatements.find((s) => String(s.card_id) === String(cardId) && s.closing_date === closing) || null,
-  [cardStatements]);
   const reconcileStatement = reconcileCard && reconcileForm.closing ? statementFor(reconcileCard.id, reconcileForm.closing) : null;
+  // El banco liquida pesos y dólares por separado, así que se controlan por separado. En pesos:
+  // compras cargadas + impuestos = saldo del resumen. Lo que quede sin explicar son compras que faltan.
+  const reconcileCheck = useMemo(() => {
+    const isTax = (m) => m.category === "Impuestos Tarjetas";
+    const arsMovs = reconcileMovements.filter((m) => m.currency !== "USD");
+    const usdMovs = reconcileMovements.filter((m) => m.currency === "USD");
+    const purchasesArs = round2(arsMovs.filter((m) => !isTax(m)).reduce((a, m) => a + Number(m.amountArs || 0), 0));
+    const registeredTaxes = round2(arsMovs.filter(isTax).reduce((a, m) => a + Number(m.amountArs || 0), 0));
+    const purchasesUsd = round2(usdMovs.reduce((a, m) => a + Number(m.originalAmount || 0), 0));
+    const typedTaxes = sumArNumbers(reconcileForm.taxesText);
+    const taxes = typedTaxes ?? registeredTaxes;
+    const stmtArs = parseArNumber(reconcileForm.statementTotal);
+    const stmtUsd = parseArNumber(reconcileForm.statementUsd);
+    return {
+      purchasesArs, registeredTaxes, typedTaxes, taxes, purchasesUsd, stmtArs, stmtUsd,
+      diffArs: stmtArs != null ? round2(stmtArs - purchasesArs - taxes) : null,
+      diffUsd: stmtUsd != null ? round2(stmtUsd - purchasesUsd) : null,
+    };
+  }, [reconcileMovements, reconcileForm.taxesText, reconcileForm.statementTotal, reconcileForm.statementUsd]);
   // Resumen de los cierres de la tarjeta: los ya pagados no suman a "pendiente de pago", así no se
   // paga dos veces lo mismo. Sólo se listan cierres con movimientos (o un resumen guardado).
   const reconcileOverview = useMemo(() => {
@@ -1979,7 +2067,7 @@ export default function App() {
     const todayIso = today();
     const rows = reconcileClosings
       .map((c) => {
-        const st = statementFor(reconcileCard.id, c.end);
+        const st = statementFor(reconcileCard.id, c.key);
         const sum = cardMovementsIn(reconcileCard.id, c).reduce((a, m) => a + Number(m.amountArs || 0), 0);
         return { ...c, sum, statement: st, paid: !!st?.paid, closed: c.end <= todayIso };
       })
@@ -2649,7 +2737,7 @@ export default function App() {
 
             <Card>
               <CardHead title="Conciliación de resumen de tarjeta" icon="🧾" />
-              <p className="muted small" style={{ marginBottom: 12 }}>Elegí la tarjeta y el cierre del resumen para ver qué cargaste en ese período. Si falta algo, cargalo en "Cargar". Cuando esté completo, poné el total del resumen del banco: la diferencia (mayormente impuestos, o algún gasto que falte cargar: revisalo) se registra como gasto en "Impuestos Tarjetas". Al pagar el resumen, marcalo como pagado para no pagarlo dos veces.</p>
+              <p className="muted small" style={{ marginBottom: 12 }}>Elegí la tarjeta y el resumen (cierre). Cargá del PDF del banco: la <strong>fecha real de cierre</strong>, el <strong>saldo en pesos</strong> (y en U$S si tiene), y los <strong>impuestos</strong> sumándolos con la calculadora. La app te dice si lo cargado + impuestos coincide con el saldo: si <strong>faltan compras</strong>, te marca cuánto y no deja que se escondan como impuestos.</p>
               <div className="form-grid three-col">
                 <Field label="Tarjeta">
                   <Select
@@ -2659,24 +2747,41 @@ export default function App() {
                       const list = closingsForCard(card);
                       // Arranca en el último cierre ya ocurrido (el resumen que se está por pagar).
                       const latestClosed = list.find((c) => c.end <= today()) || list[0];
-                      setReconcileForm({ cardId: v, closing: latestClosed ? latestClosed.end : "", statementTotal: "", paymentDate: "" });
+                      if (latestClosed) selectClosing(v, latestClosed.key);
+                      else setReconcileForm({ cardId: v, closing: "", statementTotal: "", statementUsd: "", taxesText: "", paymentDate: "" });
                     }}
                   >
                     <option value="">Elegir tarjeta…</option>
                     {cards.map((c) => <option key={c.id} value={String(c.id)}>{c.name}{c.owner ? ` · ${c.owner}` : ""}</option>)}
                   </Select>
                 </Field>
-                <Field label="Cierre a pagar">
-                  <Select value={reconcileForm.closing} disabled={!reconcileCard} onChange={(v) => setReconcileForm({ ...reconcileForm, closing: v, statementTotal: "", paymentDate: "" })}>
-                    <option value="">{reconcileCard ? "Elegir cierre…" : "Primero elegí tarjeta"}</option>
+                <Field label="Resumen (cierre)">
+                  <Select value={reconcileForm.closing} disabled={!reconcileCard} onChange={(v) => selectClosing(reconcileCard.id, v)}>
+                    <option value="">{reconcileCard ? "Elegir resumen…" : "Primero elegí tarjeta"}</option>
                     {reconcileClosings.map((c) => (
-                      <option key={c.end} value={c.end}>{`Cierre ${isoToDmy(c.end)} · ${isoToDm(c.start)} al ${isoToDm(c.end)}${statementFor(reconcileCard.id, c.end)?.paid ? " · ✓ pagado" : ""}`}</option>
+                      <option key={c.key} value={c.key}>{`Cierre ${isoToDmy(c.end)} · ${isoToDm(c.start)} al ${isoToDm(c.end)}${statementFor(reconcileCard.id, c.key)?.paid ? " · ✓ pagado" : ""}`}</option>
                     ))}
                   </Select>
                 </Field>
-                <Field label="Total según resumen del banco"><MoneyInput value={reconcileForm.statementTotal} onChange={(e) => setReconcileForm({ ...reconcileForm, statementTotal: e.target.value })} placeholder="0" /></Field>
-                <Field label="Fecha de pago"><Input type="date" value={reconcileForm.paymentDate} onChange={(e) => setReconcileForm({ ...reconcileForm, paymentDate: e.target.value })} /></Field>
+                <Field label="Fecha real de cierre (según el resumen)">
+                  <Input type="date" value={reconcilePeriod ? reconcilePeriod.end : ""} onChange={(e) => setRealClosingDate(e.target.value)} />
+                </Field>
+                <Field label="Saldo en pesos del resumen ($)"><input type="text" inputMode="decimal" className="control" value={reconcileForm.statementTotal} placeholder="Ej. 344.042,01" onChange={(e) => setReconcileForm({ ...reconcileForm, statementTotal: e.target.value })} /></Field>
+                <Field label="Saldo en dólares del resumen (U$S)"><input type="text" inputMode="decimal" className="control" value={reconcileForm.statementUsd} placeholder="Ej. 35,00 (vacío si no tiene)" onChange={(e) => setReconcileForm({ ...reconcileForm, statementUsd: e.target.value })} /></Field>
+                <Field label="Fecha de pago (vencimiento)"><Input type="date" value={reconcileForm.paymentDate} onChange={(e) => setReconcileForm({ ...reconcileForm, paymentDate: e.target.value })} /></Field>
               </div>
+              <Field label="Impuestos del resumen (calculadora: sumá los importes con +, espacio o enter)">
+                <textarea
+                  className="control" rows={2} style={{ resize: "vertical", fontFamily: "inherit" }}
+                  value={reconcileForm.taxesText} placeholder={"Ej. 3.401,11 + 529,73 + 15.891,75   (sellos, IVA, percepciones...)"}
+                  onChange={(e) => setReconcileForm({ ...reconcileForm, taxesText: e.target.value })}
+                />
+              </Field>
+              {reconcileForm.taxesText.trim() && (
+                <div className="muted small" style={{ marginTop: 4 }}>
+                  Suma de impuestos: <strong>{reconcileCheck.typedTaxes != null ? `$ ${fmtArInput(reconcileCheck.typedTaxes)}` : "—"}</strong>
+                </div>
+              )}
               {reconcileCard && !reconcileCard.closing_day && (
                 <InfoBox color="amber">Esta tarjeta no tiene día de cierre configurado, así que se usa el mes calendario y puede no coincidir con el resumen. Cargalo en Config → Tarjetas (✏).</InfoBox>
               )}
@@ -2685,53 +2790,73 @@ export default function App() {
                   <div className="muted small" style={{ margin: "10px 0 4px" }}>Movimientos del {isoToDmy(reconcilePeriod.start)} al {isoToDmy(reconcilePeriod.end)}</div>
                   {reconcileMovements.length === 0 && <EmptyState msg="No hay movimientos cargados con esta tarjeta en ese cierre." />}
                   {reconcileMovements.map((m) => (
-                    <div key={m.id} className="report-row"><div>{m.date} · {m.category}{m.description ? ` · ${m.description}` : ""}</div><strong>{fmtArs(m.amountArs)}</strong></div>
+                    <div key={m.id} className="report-row">
+                      <div>{m.date} · {m.person} · {m.category}{m.description ? ` · ${m.description}` : ""}</div>
+                      <strong>{m.currency === "USD" ? `U$S ${fmtArInput(m.originalAmount)}` : fmtArs(m.amountArs)}</strong>
+                    </div>
                   ))}
-                  <div className="report-row total"><div>Total cargado</div><strong>{fmtArs(reconcileSum)}</strong></div>
+
+                  {/* Control en pesos: compras cargadas + impuestos = saldo del resumen. */}
+                  <div className="report-row"><div>Compras cargadas en pesos</div><strong>{fmtArs(reconcileCheck.purchasesArs)}</strong></div>
+                  <div className="report-row"><div>Impuestos {reconcileCheck.typedTaxes != null ? "(los que cargaste arriba)" : "(ya registrados en este período)"}</div><strong>{fmtArs(reconcileCheck.taxes)}</strong></div>
+                  <div className="report-row total"><div>Total esperado en pesos</div><strong>{fmtArs(round2(reconcileCheck.purchasesArs + reconcileCheck.taxes))}</strong></div>
+                  {reconcileCheck.stmtArs != null && (
+                    <InfoBox color={Math.abs(reconcileCheck.diffArs) <= 1 ? "green" : reconcileCheck.diffArs > 0 ? "amber" : "blue"}>
+                      {Math.abs(reconcileCheck.diffArs) <= 1
+                        ? <>✓ <strong>Cuadra en pesos</strong>: el saldo del resumen ({fmtArs(reconcileCheck.stmtArs)}) coincide con lo cargado + impuestos.</>
+                        : reconcileCheck.diffArs > 0
+                          ? <>⚠ <strong>Faltan cargar compras por {fmtArs(reconcileCheck.diffArs)}</strong>. El resumen dice {fmtArs(reconcileCheck.stmtArs)} y entre lo cargado e impuestos suman {fmtArs(round2(reconcileCheck.purchasesArs + reconcileCheck.taxes))}. Buscá en el PDF las compras que no tenés en la lista de arriba y cargalas en "Cargar".
+                            {reconcileForm.taxesText.trim() === "" && (
+                              <> Si en realidad es todo impuestos, <button type="button" onClick={() => setReconcileForm((f) => ({ ...f, taxesText: fmtArInput(round2(reconcileCheck.taxes + reconcileCheck.diffArs)) }))} style={{ background: "none", border: "none", color: "inherit", fontWeight: 700, textDecoration: "underline", cursor: "pointer", font: "inherit" }}>tomar esta diferencia como impuestos</button>.</>
+                            )}</>
+                          : <>Lo cargado + impuestos ({fmtArs(round2(reconcileCheck.purchasesArs + reconcileCheck.taxes))}) <strong>supera al resumen en {fmtArs(Math.abs(reconcileCheck.diffArs))}</strong> (resumen: {fmtArs(reconcileCheck.stmtArs)}). Puede haber algo duplicado, con fecha de otro resumen o con otra tarjeta.</>}
+                    </InfoBox>
+                  )}
+                  {/* Control en dólares: el banco los liquida aparte. */}
+                  {(reconcileCheck.purchasesUsd > 0 || reconcileCheck.stmtUsd != null) && (
+                    <InfoBox color={reconcileCheck.diffUsd == null ? "blue" : Math.abs(reconcileCheck.diffUsd) <= 0.01 ? "green" : "amber"}>
+                      Dólares: cargado <strong>U$S {fmtArInput(reconcileCheck.purchasesUsd)}</strong>
+                      {reconcileCheck.stmtUsd != null
+                        ? Math.abs(reconcileCheck.diffUsd) <= 0.01
+                          ? <> · ✓ coincide con el resumen.</>
+                          : <> · el resumen dice <strong>U$S {fmtArInput(reconcileCheck.stmtUsd)}</strong>: {reconcileCheck.diffUsd > 0 ? "faltan cargar" : "sobran"} <strong>U$S {fmtArInput(Math.abs(reconcileCheck.diffUsd))}</strong>.</>
+                        : <> · cargá el saldo en U$S del resumen para controlarlo.</>}
+                    </InfoBox>
+                  )}
+
                   {reconcileStatement?.paid ? (
                     <>
                       <InfoBox color="green">
-                        ✓ Este cierre ya está <strong>pagado</strong>{reconcileStatement.payment_date ? <> el {isoToDmy(reconcileStatement.payment_date)}</> : null}
-                        {reconcileStatement.statement_total != null ? <> (resumen {fmtArs(Number(reconcileStatement.statement_total))})</> : null}. No suma a lo pendiente de pago.
+                        ✓ Este resumen ya está <strong>pagado</strong>{reconcileStatement.payment_date ? <> el {isoToDmy(reconcileStatement.payment_date)}</> : null}. No suma a lo pendiente de pago.
                       </InfoBox>
                       <div style={{ marginTop: 12 }}>
                         <Btn variant="outline" onClick={() => setStatementPaid(reconcileCard.id, reconcileForm.closing, false)}>Deshacer pago</Btn>
                       </div>
                     </>
                   ) : (
-                    <>
-                      {reconcileDiff !== null && (
-                        <InfoBox color={reconcileDiff > 0 ? "blue" : "amber"}>
-                          {reconcileDiff > 0
-                            ? <>Diferencia a registrar: <strong>{fmtArs(reconcileDiff)}</strong> (resumen − cargado).</>
-                            : reconcileDiff === 0
-                              ? <>El total cargado coincide con el resumen.</>
-                              : <>El total cargado supera el resumen ({fmtArs(reconcileSum)} vs {fmtArs(Number(reconcileForm.statementTotal))}). Revisá que no haya algo duplicado antes de seguir.</>}
-                        </InfoBox>
+                    <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <Btn variant="outline" onClick={() => saveStatementFields()} disabled={saving}>💾 Guardar datos del resumen</Btn>
+                      {reconcileCheck.typedTaxes != null && reconcileCheck.typedTaxes - reconcileCheck.registeredTaxes > 0.005 && (
+                        <Btn onClick={registerCardTaxes} disabled={saving}>{saving ? "Guardando…" : `Registrar impuestos como gasto (${fmtArs(round2(reconcileCheck.typedTaxes - reconcileCheck.registeredTaxes))})`}</Btn>
                       )}
-                      <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {reconcileDiff !== null && (
-                          <Btn onClick={registerCardDifference} disabled={saving || reconcileDiff <= 0}>{saving ? "Guardando…" : "Registrar diferencia como gasto de tarjeta"}</Btn>
-                        )}
-                        <Btn variant="outline" onClick={() => setStatementPaid(reconcileCard.id, reconcileForm.closing, true, reconcileForm.paymentDate || today())}>✓ Marcar cierre como pagado</Btn>
-                      </div>
-                    </>
+                      <Btn variant="outline" onClick={() => setStatementPaid(reconcileCard.id, reconcileForm.closing, true, reconcileForm.paymentDate || today())}>✓ Marcar resumen como pagado</Btn>
+                    </div>
                   )}
 
                   {reconcileOverview.rows.length > 0 && (
                     <div style={{ marginTop: 18 }}>
                       <div className="fw" style={{ fontSize: "0.9rem", marginBottom: 4 }}>Cierres de {reconcileCard.name}</div>
                       {reconcileOverview.rows.map((r) => (
-                        <div key={r.end} className="report-row" style={{ gap: 8, alignItems: "center", opacity: r.paid ? 0.65 : 1 }}>
+                        <div key={r.key} className="report-row" style={{ gap: 8, alignItems: "center", opacity: r.paid ? 0.65 : 1 }}>
                           <div
                             style={{ cursor: "pointer", flex: 1 }}
-                            onClick={() => setReconcileForm((f) => ({ ...f, closing: r.end, statementTotal: "", paymentDate: "" }))}
+                            onClick={() => selectClosing(reconcileCard.id, r.key)}
                             title="Ver este cierre"
                           >
                             Cierre {isoToDmy(r.end)} <span className="muted small">· {isoToDm(r.start)} al {isoToDm(r.end)}{r.paid ? ` · pagado${r.statement.payment_date ? ` el ${isoToDmy(r.statement.payment_date)}` : ""}` : r.closed ? " · pendiente de pago" : " · abierto"}</span>
                           </div>
                           <strong style={r.paid ? { textDecoration: "line-through" } : undefined}>{fmtArs(Number(r.statement?.statement_total ?? r.sum))}</strong>
-                          {r.closed && !r.paid && <Btn small variant="outline" onClick={() => setStatementPaid(reconcileCard.id, r.end, true, null)}>✓ Pagado</Btn>}
+                          {r.closed && !r.paid && <Btn small variant="outline" onClick={() => setStatementPaid(reconcileCard.id, r.key, true, null)}>✓ Pagado</Btn>}
                         </div>
                       ))}
                       <div className="report-row total"><div>Pendiente de pago (cierres ya cerrados, sin pagar)</div><strong>{fmtArs(reconcileOverview.pendingTotal)}</strong></div>
