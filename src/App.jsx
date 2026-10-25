@@ -118,6 +118,20 @@ const addDaysIso = (iso, n) => {
   d.setDate(d.getDate() + n);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
+// Supabase devuelve como máximo 1000 filas por consulta (sin avisar): con más movimientos que eso, la
+// app sólo recibía los 1000 más nuevos y todo lo anterior "desaparecía" de la pantalla y de los saldos.
+// Esto pide la tabla por páginas hasta traerla completa. `buildQuery` debe ordenar de forma estable.
+async function fetchAllRows(buildQuery) {
+  const pageSize = 1000;
+  const all = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await buildQuery().range(from, from + pageSize - 1);
+    if (error) return { data: all, error };
+    all.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+  return { data: all, error: null };
+}
 const isoToDmy = (iso) => (iso ? iso.split("-").reverse().join("/") : "");
 const isoToDm = (iso) => (iso ? iso.split("-").reverse().slice(0, 2).join("/") : "");
 
@@ -922,17 +936,17 @@ export default function App() {
       setLoading(true);
       try {
         const [movsR, dbsR, dpsR, glsR, bgsR, mbsR, catsR, categoriesR, subcatsR, cardsR, seriesR, loansR, loanPaysR, cardStmtsR] = await Promise.all([
-          supabase.from("movements").select("*").order("movement_date", { ascending: false }),
+          fetchAllRows(() => supabase.from("movements").select("*").order("movement_date", { ascending: false }).order("id", { ascending: false })),
           supabase.from("debts").select("*").order("created_at", { ascending: false }),
           supabase.from("debt_payments").select("*").order("payment_date", { ascending: false }),
           supabase.from("goals").select("*").order("created_at", { ascending: false }),
-          supabase.from("budgets").select("*").order("created_at", { ascending: false }),
+          fetchAllRows(() => supabase.from("budgets").select("*").order("created_at", { ascending: false }).order("id", { ascending: false })),
           supabase.from("monthly_balances").select("*").order("balance_month", { ascending: false }),
           supabase.from("settings_catalog").select("*").order("created_at"),
           supabase.from("categories").select("*").eq("active", true).order("type").order("name"),
           supabase.from("subcategories").select("*").eq("active", true).order("category_id").order("name"),
           supabase.from("cards").select("*").eq("active", true).order("name"),
-          supabase.from("movement_series").select("*").eq("active", true).order("created_at", { ascending: false }),
+          fetchAllRows(() => supabase.from("movement_series").select("*").eq("active", true).order("created_at", { ascending: false }).order("id", { ascending: false })),
           supabase.from("loans").select("*").order("created_at", { ascending: false }),
           supabase.from("loan_payments").select("*").order("payment_date", { ascending: false }),
           supabase.from("card_statements").select("*"),
