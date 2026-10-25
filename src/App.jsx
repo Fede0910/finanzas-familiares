@@ -1459,6 +1459,30 @@ export default function App() {
     setSaving(false);
   }
 
+  // Lo que falta para que el resumen cuadre (chico, ej. centavos o cargos menores) se registra directo
+  // como "Gastos no cargados" en vez de seguir buscando la compra. Si es grande, antes pide confirmar.
+  async function registerMissingExpense() {
+    const cardId = Number(reconcileForm.cardId);
+    const { diffArs, stmtArs } = reconcileCheck;
+    if (!cardId || !reconcilePeriod || diffArs == null || diffArs <= 1) return;
+    if (stmtArs && diffArs > stmtArs * 0.05) {
+      if (!window.confirm(`Faltan $ ${fmtArInput(diffArs)}, más del 5% del resumen. Puede ser una compra que te olvidaste de cargar. ¿Registrarlo igual como "Gastos no cargados"?`)) return;
+    }
+    setSaving(true);
+    const owner = people.includes(reconcileCard?.owner) ? reconcileCard.owner : "Federico";
+    const row = {
+      movement_date: reconcilePeriod.end, person: owner, type: "Egreso", category: "Gastos no cargados",
+      subcategory_id: null, description: `Gastos no cargados · ${cardNameById[cardId] || "tarjeta"} · cierre ${isoToDmy(reconcilePeriod.end)}`,
+      original_currency: "ARS", original_amount: diffArs, fx_rate: 1, amount_ars: diffArs,
+      amount_usd: diffArs / Math.max(blueRate, 1), payment_method: "Tarjeta",
+      linked_debt_id: null, linked_goal_id: null, card_id: cardId,
+    };
+    const { data, error } = await supabase.from("movements").insert([row]).select().single();
+    if (!error && data) setMovements((prev) => [mapMovementRow(data), ...prev]);
+    await saveStatementFields();
+    setSaving(false);
+  }
+
   // Alta/actualización del registro de un cierre (total del resumen, fecha de pago, pagado).
   async function saveCardStatement(cardId, closing, fields) {
     const existing = statementFor(cardId, closing);
@@ -2838,6 +2862,9 @@ export default function App() {
                       <Btn variant="outline" onClick={() => saveStatementFields()} disabled={saving}>💾 Guardar datos del resumen</Btn>
                       {reconcileCheck.typedTaxes != null && reconcileCheck.typedTaxes - reconcileCheck.registeredTaxes > 0.005 && (
                         <Btn onClick={registerCardTaxes} disabled={saving}>{saving ? "Guardando…" : `Registrar impuestos como gasto (${fmtArs(round2(reconcileCheck.typedTaxes - reconcileCheck.registeredTaxes))})`}</Btn>
+                      )}
+                      {reconcileCheck.diffArs != null && reconcileCheck.diffArs > 1 && (
+                        <Btn variant="outline" onClick={registerMissingExpense} disabled={saving}>{`Registrar ${fmtArs(reconcileCheck.diffArs)} como "Gastos no cargados"`}</Btn>
                       )}
                       <Btn variant="outline" onClick={() => setStatementPaid(reconcileCard.id, reconcileForm.closing, true, reconcileForm.paymentDate || today())}>✓ Marcar resumen como pagado</Btn>
                     </div>
