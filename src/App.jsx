@@ -805,11 +805,13 @@ function DescriptionAutocomplete({ value, onChange, suggestions }) {
 }
 
 // Panel de edición completo de un movimiento (todos los campos, no solo importe/detalle).
-function MovementEditPanel({ data, onChange, types, categoryMap, subcategoryMap, categoryIdFor, people, cards, onSave, onCancel, groupMates = [], applyToGroup = false, onApplyToGroupChange }) {
+function MovementEditPanel({ data, onChange, types, categoryMap, subcategoryMap, categoryIdFor, people, cards, onSave, onCancel, groupMates = [], applyToGroup = false, onApplyToGroupChange, groupMode = false, groupNames = [] }) {
   return (
     <div className="form-grid" style={{ margin: "8px 0", padding: 10, background: "var(--surface-2)", borderRadius: 10 }}>
       <Field label="Fecha"><Input type="date" value={data.date} onChange={(e) => onChange({ ...data, date: e.target.value })} /></Field>
-      <Field label="Persona"><Select value={data.person} onChange={(v) => onChange({ ...data, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+      {groupMode
+        ? <Field label="Personas"><div className="control" style={{ display: "flex", alignItems: "center", color: "var(--muted)" }}>🤝 {groupNames.join(" + ")}</div></Field>
+        : <Field label="Persona"><Select value={data.person} onChange={(v) => onChange({ ...data, person: v })}>{people.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>}
       <Field label="Tipo"><Select value={data.type} onChange={(v) => onChange({ ...data, type: v, category: "", subcategoryId: "" })}>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
       <Field label="Categoría"><Select value={data.category} onChange={(v) => onChange({ ...data, category: v, subcategoryId: "" })}><option value="">Seleccionar…</option>{(categoryMap[data.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
       <Field label="Subcategoría">
@@ -820,7 +822,7 @@ function MovementEditPanel({ data, onChange, types, categoryMap, subcategoryMap,
       </Field>
       <Field label="Detalle"><Input value={data.description} onChange={(e) => onChange({ ...data, description: e.target.value })} /></Field>
       <Field label="Moneda"><Select value={data.currency} onChange={(v) => onChange({ ...data, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
-      <Field label="Importe"><MoneyInput value={data.originalAmount} onChange={(e) => onChange({ ...data, originalAmount: e.target.value })} /></Field>
+      <Field label={groupMode ? "Importe total" : "Importe"}><MoneyInput value={data.originalAmount} onChange={(e) => onChange({ ...data, originalAmount: e.target.value })} /></Field>
       <Field label="Medio de pago">
         <Select value={data.paymentMethod} onChange={(v) => onChange({ ...data, paymentMethod: v, cardId: v === "Tarjeta" ? data.cardId : "" })}>
           <option value="">Sin especificar</option>
@@ -845,7 +847,12 @@ function MovementEditPanel({ data, onChange, types, categoryMap, subcategoryMap,
         <Btn small onClick={onSave}>✓ Guardar</Btn>
         <Btn small variant="outline" onClick={onCancel}>✕ Cancelar</Btn>
       </div>
-      <div className="muted small" style={{ gridColumn: "1 / -1" }}>Nota: {groupMates.length > 0 && applyToGroup ? "se edita este movimiento y los del gasto compartido (de esa misma cuota)." : "esto edita solo este movimiento."} Si es parte de una compra en cuotas, cambiar acá no reparte el cambio al resto de las cuotas.</div>
+      <div className="muted small" style={{ gridColumn: "1 / -1" }}>
+        {groupMode
+          ? <>Nota: editás el gasto compartido completo. El importe es el <strong>total</strong>: si lo cambiás se reparte en partes iguales entre {groupNames.join(", ")}. </>
+          : <>Nota: {groupMates.length > 0 && applyToGroup ? "se edita este movimiento y los del gasto compartido (de esa misma cuota)." : "esto edita solo este movimiento."} </>}
+        Si es parte de una compra en cuotas, cambiar acá no reparte el cambio al resto de las cuotas.
+      </div>
     </div>
   );
 }
@@ -892,6 +899,9 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [editingMovId, setEditingMovId] = useState(null);
   const [editApplyToGroup, setEditApplyToGroup] = useState(true);
+  const [editGroupMode, setEditGroupMode] = useState(false); // se está editando un gasto compartido completo (fila agrupada)
+  const [splitMode, setSplitMode] = useState(false); // Cargar: desglosar la compra por subcategoría
+  const [splitAmounts, setSplitAmounts] = useState({}); // id de subcategoría ("" = sin subcategoría) -> importe
   const [editMovData, setEditMovData] = useState({ date: "", person: "", type: "", category: "", subcategoryId: "", description: "", currency: "ARS", originalAmount: "", paymentMethod: "", cardId: "" });
 
   // "Mes global": uno o más meses. Las vistas que solo tienen sentido para UN mes (Dashboard,
@@ -1112,23 +1122,54 @@ export default function App() {
   const fmt = useCallback((value) => money(value, displayCurrency), [displayCurrency]);
   const fmtArs = useCallback((value) => money(value, "ARS"), []);
 
+  // Desglose por subcategoría: una compra (ej. el ticket del supermercado) se carga de una vez con un
+  // importe por subcategoría; se guarda un movimiento por cada línea con importe.
+  const splitSubcategories = useMemo(
+    () => (movForm.category ? (subcategoryMap[categoryIdFor(movForm.type, movForm.category)] || []) : []),
+    [movForm.type, movForm.category, subcategoryMap, categoryIdFor]
+  );
+  const splitActive = splitMode && splitSubcategories.length > 0;
+  // Incluye "Sin subcategoría" para lo que no encaja en ninguna.
+  const splitLines = useMemo(
+    () => [...splitSubcategories.map((s) => ({ id: String(s.id), name: s.name })), { id: "", name: "Sin subcategoría" }]
+      .map((l) => ({ ...l, amount: Number(splitAmounts[l.id] || 0) })),
+    [splitSubcategories, splitAmounts]
+  );
+  const splitTotal = splitLines.reduce((a, l) => a + l.amount, 0);
+  // Con el desglose activo el importe del formulario es la suma de las líneas (lo usan los avisos y el botón).
+  useEffect(() => {
+    if (!splitActive) return;
+    const next = splitTotal ? String(splitTotal) : "";
+    setMovForm((f) => (f.originalAmount === next ? f : { ...f, originalAmount: next }));
+  }, [splitActive, splitTotal]);
+
   async function addMovement() {
     // Si es compartido la persona no se elige acá (se reparte entre "sharedPeople" más abajo), así
     // que no se exige movForm.person en ese caso.
-    if (!movForm.category || !movForm.originalAmount || !movForm.type || (!movForm.shared && !movForm.person)) return;
+    const lines = splitActive
+      ? splitLines.filter((l) => l.amount > 0).map((l) => ({ subcategoryId: l.id, originalAmount: String(l.amount) }))
+      : [{ subcategoryId: movForm.subcategoryId, originalAmount: movForm.originalAmount }];
+    if (!movForm.category || !movForm.type || !lines.length || lines.some((l) => !l.originalAmount) || (!movForm.shared && !movForm.person)) return;
     setSaving(true);
+    for (const line of lines) await addOneMovement({ ...movForm, ...line });
+    setMovForm(emptyMovForm());
+    setSplitAmounts({});
+    setSaving(false);
+  }
 
+  // Guarda UN movimiento (o su reparto/cuotas) a partir de un formulario. `form` puede ser una línea
+  // del desglose por subcategoría; dentro se usa con el nombre `movForm` como en el resto del código.
+  async function addOneMovement(form) {
+    const movForm = form;
     const isShared = movForm.shared && movForm.sharedPeople.length >= 2;
     if (isShared) {
-      await addSharedMovement();
-      setSaving(false);
+      await addSharedMovement(movForm);
       return;
     }
 
     const isCardInstallments = movForm.paymentMethod === "Tarjeta" && movForm.cardId && Number(movForm.installments) > 1;
     if (isCardInstallments) {
-      await addCardInstallmentPurchase();
-      setSaving(false);
+      await addCardInstallmentPurchase(movForm);
       return;
     }
 
@@ -1183,8 +1224,6 @@ export default function App() {
         setDebts((prev) => prev.map((d) => d.id === selectedDebt.id ? { ...d, balance: newBalance, totalPaid: newPaid } : d));
       }
     }
-    setMovForm(emptyMovForm());
-    setSaving(false);
   }
 
   async function deleteMovement(id) {
@@ -1222,7 +1261,8 @@ export default function App() {
   // un movimiento por persona, todos ligados por shared_group_id. Si además es una compra en
   // tarjeta a varias cuotas, la parte de cada persona se reparte a su vez en N movimientos
   // mensuales (con su propia serie), manteniendo el shared_group_id común a todo el grupo.
-  async function addSharedMovement() {
+  async function addSharedMovement(form) {
+    const movForm = form;
     const total = Number(movForm.originalAmount);
     const peopleList = movForm.sharedPeople;
     const n = peopleList.length;
@@ -1298,7 +1338,8 @@ export default function App() {
   }
 
   // Compra con tarjeta en cuotas: parte el importe total en N movimientos mensuales ligados a una serie.
-  async function addCardInstallmentPurchase() {
+  async function addCardInstallmentPurchase(form) {
+    const movForm = form;
     const n = Number(movForm.installments);
     const total = Number(movForm.originalAmount);
     if (!n || n < 2 || !total) return;
@@ -1393,11 +1434,21 @@ export default function App() {
     if (blocked > 0) window.alert(`Se actualizó la fecha, pero ${blocked} movimiento(s) no se pudieron borrar porque son de un mes ya cerrado.`);
   }
 
-  async function deleteSeries(series) {
-    if (!window.confirm("¿Eliminar esta serie? Se borran los movimientos futuros generados (no los que ya pasaron ni los de meses cerrados).")) return;
+  async function deleteSeries(series, skipConfirm = false) {
+    if (!skipConfirm && !window.confirm("¿Eliminar esta serie? Se borran los movimientos futuros generados (no los que ya pasaron ni los de meses cerrados).")) return;
     await truncateSeries(series, today());
     await supabase.from("movement_series").update({ active: false }).eq("id", series.id);
     setMovementSeries((prev) => prev.filter((s) => s.id !== series.id));
+  }
+
+  // Una serie compartida son varias series (una por persona): se cortan/borran todas juntas.
+  async function truncateSeriesGroup(group, newEndDate) {
+    for (const s of group.series) await truncateSeries(s, newEndDate);
+  }
+  async function deleteSeriesGroup(group) {
+    const who = group.series.length > 1 ? ` compartida entre ${group.persons.join(", ")}` : "";
+    if (!window.confirm(`¿Eliminar esta serie${who}? Se borran los movimientos futuros generados (no los que ya pasaron ni los de meses cerrados).`)) return;
+    for (const s of group.series) await deleteSeries(s, true);
   }
 
   // Elegir un resumen (cierre) de una tarjeta: carga en el formulario lo que ya se había guardado.
@@ -1571,19 +1622,73 @@ export default function App() {
   }
 
   function startEditMovement(m) {
+    // Una fila agrupada (gasto compartido visto por su total) se edita completa: importe total y sin persona.
+    const isGroup = !!m.isGroup && (m.members?.length || 0) > 1;
+    setEditGroupMode(isGroup);
     setEditingMovId(m.id);
     setEditApplyToGroup(true);
     setEditMovData({
-      date: m.date, person: m.person, type: m.type, category: m.category,
+      date: m.date, person: isGroup ? "" : m.person, type: m.type, category: m.category,
       subcategoryId: m.subcategoryId ? String(m.subcategoryId) : "", description: m.description || "",
       currency: m.currency, originalAmount: String(m.originalAmount),
       paymentMethod: m.paymentMethod || "", cardId: m.cardId ? String(m.cardId) : "",
     });
   }
 
+  // Edita un gasto compartido completo (fila agrupada por total). Si cambia el importe total (o la
+  // moneda) se reparte en partes iguales entre las personas, como al cargarlo; si no, cada uno
+  // conserva su parte. Los meses ya cerrados no se tocan.
+  async function saveEditMovementGroup(mov) {
+    const members = shareGroups.get(mov.sharedGroupId) || [mov];
+    const total = Number(editMovData.originalAmount);
+    if (!total || !editMovData.type || !editMovData.category) return;
+    const rate = editMovData.currency === "USD" ? (editMovData.currency !== mov.currency ? blueRate : mov.fxRate) : 1;
+    const oldTotal = Math.round(members.reduce((a, x) => a + Number(x.originalAmount || 0), 0) * 100) / 100;
+    const keepAmounts = editMovData.currency === mov.currency && Math.abs(total - oldTotal) < 0.005;
+    const n = members.length;
+    const share = Math.round((total / n) * 100) / 100;
+    const subcategoryId = editMovData.subcategoryId ? Number(editMovData.subcategoryId) : null;
+    const cardId = editMovData.paymentMethod === "Tarjeta" && editMovData.cardId ? Number(editMovData.cardId) : null;
+    const patches = new Map();
+    let failed = 0;
+    for (let i = 0; i < n; i++) {
+      const m = members[i];
+      if (monthlyBalances.some((b) => b.closed && b.balance_month === monthKey(m.date))) continue;
+      const amount = keepAmounts ? Number(m.originalAmount) : (i === n - 1 ? Math.round((total - share * (n - 1)) * 100) / 100 : share);
+      const amountArs = toArs(amount, editMovData.currency, rate);
+      const amountUsd = editMovData.currency === "USD" ? amount : amountArs / Math.max(blueRate, 1);
+      const { error } = await supabase.from("movements").update({
+        movement_date: editMovData.date, type: editMovData.type, category: editMovData.category,
+        subcategory_id: subcategoryId, description: editMovData.description || null,
+        original_currency: editMovData.currency, original_amount: amount, fx_rate: rate,
+        amount_ars: amountArs, amount_usd: amountUsd, payment_method: editMovData.paymentMethod || null, card_id: cardId,
+      }).eq("id", m.id);
+      if (error) { failed++; continue; }
+      patches.set(m.id, {
+        date: editMovData.date, type: editMovData.type, category: editMovData.category, subcategoryId,
+        description: editMovData.description, currency: editMovData.currency, originalAmount: amount, fxRate: rate,
+        amountArs, amountUsd, paymentMethod: editMovData.paymentMethod || null, cardId,
+      });
+    }
+    setMovements((prev) => prev.map((m) => patches.has(m.id) ? { ...m, ...patches.get(m.id) } : m));
+    if (failed) window.alert(`No se pudieron actualizar ${failed} de los ${n} movimientos de este gasto compartido. Revisalos en Datos.`);
+    setEditingMovId(null);
+    setEditGroupMode(false);
+  }
+
+  // Borra un gasto compartido completo (todas las partes de la fila agrupada).
+  async function deleteMovementGroup(members) {
+    if (!window.confirm(`Este gasto está compartido entre ${members.map((m) => m.person).join(", ")}. ¿Borrar los ${members.length} movimientos?`)) return;
+    const ids = members.map((m) => m.id);
+    await supabase.from("movements").delete().in("id", ids);
+    const set = new Set(ids);
+    setMovements((prev) => prev.filter((m) => !set.has(m.id)));
+  }
+
   async function saveEditMovement(id) {
     const mov = movements.find((m) => m.id === id);
     if (!mov) return;
+    if (editGroupMode) return saveEditMovementGroup(mov);
     const newAmount = Number(editMovData.originalAmount);
     if (!newAmount || !editMovData.type || !editMovData.category) return;
     // Si cambió de moneda usa la cotización actual; si sigue igual, respeta la que tenía el movimiento.
@@ -2378,6 +2483,69 @@ export default function App() {
     return { byType, netArs };
   }, [filteredMovements]);
 
+  // Gastos compartidos: cada persona tiene su movimiento (misma shared_group_id). Para CONTROLAR hace
+  // falta ver el gasto por su total (lo que dice el ticket/resumen), no una fila por persona. Estas
+  // funciones juntan las filas de un mismo grupo en una sola fila con el total y la lista de personas.
+  const shareGroups = useMemo(() => {
+    const map = new Map();
+    movements.forEach((m) => {
+      if (!m.sharedGroupId) return;
+      if (!map.has(m.sharedGroupId)) map.set(m.sharedGroupId, []);
+      map.get(m.sharedGroupId).push(m);
+    });
+    map.forEach((list) => list.sort((a, b) => a.id - b.id));
+    return map;
+  }, [movements]);
+  const groupForDisplay = useCallback((list) => {
+    const seen = new Set();
+    const out = [];
+    list.forEach((m) => {
+      const members = m.sharedGroupId ? shareGroups.get(m.sharedGroupId) : null;
+      if (!members || members.length < 2) { out.push({ ...m, members: [m], isGroup: false }); return; }
+      if (seen.has(m.sharedGroupId)) return;
+      seen.add(m.sharedGroupId);
+      const sum = (key) => Math.round(members.reduce((a, x) => a + Number(x[key] || 0), 0) * 100) / 100;
+      out.push({
+        ...members[0], members, isGroup: true, person: members.map((x) => x.person).join(" + "),
+        amountArs: sum("amountArs"), amountUsd: sum("amountUsd"), originalAmount: sum("originalAmount"),
+      });
+    });
+    return out;
+  }, [shareGroups]);
+  // En Datos: con "Todas" las personas se ve cada gasto compartido por su total; si se filtra una
+  // persona se ve SU parte (la lista ya viene filtrada, así que no se agrupa).
+  const displayMovements = useMemo(
+    () => selectedPerson === "all" ? groupForDisplay(filteredMovements) : filteredMovements.map((m) => ({ ...m, members: [m], isGroup: false })),
+    [selectedPerson, filteredMovements, groupForDisplay]
+  );
+
+  // Series activas: una fila por compra/débito (suma de las partes de cada persona). Una compra
+  // compartida genera una serie por persona; se las junta por el grupo compartido de su primera cuota.
+  const seriesGroups = useMemo(() => {
+    const list = movementSeries.filter((s) => selectedPerson === "all" || s.person === selectedPerson);
+    const groups = new Map();
+    const heuristic = new Map(); // series sueltas que parecen la misma compra de varias personas
+    list.forEach((s) => {
+      const first = movements.filter((m) => m.seriesId === s.id).sort((a, b) => a.date.localeCompare(b.date))[0];
+      let key = first?.sharedGroupId;
+      if (!key) {
+        // Sin grupo compartido (cargadas por separado, ej. cada persona su parte): se juntan si coinciden
+        // tarjeta, inicio, cuotas, día y categoría, y son de personas distintas.
+        const hk = [s.kind, s.card_id, s.start_date, s.installments_total, s.day_of_month, s.category, s.subcategory_id].join("|");
+        const candidates = heuristic.get(hk) || [];
+        const target = candidates.find((k) => !groups.get(k).some((x) => x.person === s.person));
+        key = target || `solo-${s.id}`;
+        if (!target) heuristic.set(hk, [...candidates, key]);
+      }
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(s);
+    });
+    return [...groups.entries()].map(([key, series]) => ({
+      key, series, rep: series[0], persons: series.map((s) => s.person),
+      amount: Math.round(series.reduce((a, s) => a + Number(s.installment_amount || 0), 0) * 100) / 100,
+    }));
+  }, [movementSeries, movements, selectedPerson]);
+
   const goalProgress = useMemo(() => {
     return personGoals.filter((g) => g.active !== false).map((g) => {
       const currentArs = personMovements.filter((m) => {
@@ -2571,15 +2739,17 @@ export default function App() {
                   </Field>
                 )}
                 <Field label="Tipo"><Select value={movForm.type} onChange={(v) => setMovForm({ ...movForm, type: v, category: "", subcategoryId: "", linkedDebtId: "", linkedGoalId: "" })}><option value="">Seleccionar…</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-                <Field label="Categoría"><Select value={movForm.category} onChange={(v) => setMovForm({ ...movForm, category: v, subcategoryId: "", linkedDebtId: v !== "Deuda" ? "" : movForm.linkedDebtId })} disabled={!movForm.type}><option value="">Seleccionar…</option>{(categoryMap[movForm.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+                <Field label="Categoría"><Select value={movForm.category} onChange={(v) => { setMovForm({ ...movForm, category: v, subcategoryId: "", linkedDebtId: v !== "Deuda" ? "" : movForm.linkedDebtId }); setSplitAmounts({}); setSplitMode(v === "Supermercado"); }} disabled={!movForm.type}><option value="">Seleccionar…</option>{(categoryMap[movForm.type] || []).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
                 {movForm.type === "Egreso" && movForm.category === "Deuda" && <Field label="Deuda"><Select value={movForm.linkedDebtId} onChange={(v) => setMovForm({ ...movForm, linkedDebtId: v, originalAmount: personDebts.find((d) => String(d.id) === String(v))?.installment || "" })}><option value="">Elegir deuda…</option>{personDebts.map((d) => <option key={d.id} value={String(d.id)}>{d.name} ({fmtArs(d.balance)} pendiente)</option>)}</Select></Field>}
 
-                <Field label="Subcategoría">
-                  <Select value={movForm.subcategoryId} onChange={(v) => setMovForm({ ...movForm, subcategoryId: v })} disabled={!movForm.category}>
-                    <option value="">Sin subcategoría</option>
-                    {(subcategoryMap[categoryIdFor(movForm.type, movForm.category)] || []).map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
-                  </Select>
-                </Field>
+                {!splitActive && (
+                  <Field label="Subcategoría">
+                    <Select value={movForm.subcategoryId} onChange={(v) => setMovForm({ ...movForm, subcategoryId: v })} disabled={!movForm.category}>
+                      <option value="">Sin subcategoría</option>
+                      {(subcategoryMap[categoryIdFor(movForm.type, movForm.category)] || []).map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+                    </Select>
+                  </Field>
+                )}
                 <Field label="Detalle (opcional)"><DescriptionAutocomplete value={movForm.description} onChange={(v) => setMovForm({ ...movForm, description: v })} suggestions={descriptionSuggestions} /></Field>
                 <Field label="Medio de pago"><Select value={movForm.paymentMethod} onChange={(v) => setMovForm({ ...movForm, paymentMethod: v, cardId: v === "Tarjeta" ? movForm.cardId : "", installments: v === "Tarjeta" ? movForm.installments : "1" })}><option value="">Sin especificar</option>{PAYMENT_METHODS.map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
                 {movForm.paymentMethod === "Tarjeta" && (
@@ -2595,8 +2765,32 @@ export default function App() {
                 )}
 
                 <Field label="Moneda"><Select value={movForm.currency} onChange={(v) => setMovForm({ ...movForm, currency: v })}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólar blue (USD)</option></Select></Field>
-                <Field label={movForm.paymentMethod === "Tarjeta" && Number(movForm.installments) > 1 ? "Importe total de la compra" : `Importe${movForm.currency === "USD" ? " (USD)" : " (ARS)"}`}><MoneyInput value={movForm.originalAmount} onChange={(e) => setMovForm({ ...movForm, originalAmount: e.target.value })} placeholder="0" /></Field>
+                {splitActive
+                  ? <Field label="Importe total (suma del desglose)"><div className="control fw" style={{ display: "flex", alignItems: "center" }}>{splitTotal ? money(splitTotal, movForm.currency) : "—"}</div></Field>
+                  : <Field label={movForm.paymentMethod === "Tarjeta" && Number(movForm.installments) > 1 ? "Importe total de la compra" : `Importe${movForm.currency === "USD" ? " (USD)" : " (ARS)"}`}><MoneyInput value={movForm.originalAmount} onChange={(e) => setMovForm({ ...movForm, originalAmount: e.target.value })} placeholder="0" /></Field>}
               </div>
+              {splitSubcategories.length > 0 && (
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: "0.88rem", margin: "12px 0 4px" }}>
+                  <input type="checkbox" checked={splitMode} onChange={(e) => { setSplitMode(e.target.checked); setSplitAmounts({}); setMovForm((f) => ({ ...f, originalAmount: "" })); }} />
+                  <span>🧾 Desglosar por subcategoría: cargar todas de una vez (un importe por cada una)</span>
+                </label>
+              )}
+              {splitActive && (
+                <div style={{ margin: "8px 0", padding: 10, background: "var(--surface-2)", borderRadius: 10 }}>
+                  <div className="muted small" style={{ marginBottom: 8 }}>Poné el importe de cada subcategoría de {movForm.category}; las que dejes vacías no se cargan.{movForm.shared ? " Cada una se reparte entre las personas elegidas." : ""}</div>
+                  <div className="form-grid">
+                    {splitLines.map((l) => (
+                      <Field key={l.id || "none"} label={l.name}>
+                        <MoneyInput value={splitAmounts[l.id] || ""} onChange={(e) => setSplitAmounts((p) => ({ ...p, [l.id]: e.target.value }))} placeholder="0" />
+                      </Field>
+                    ))}
+                  </div>
+                  <div className="report-row total" style={{ marginTop: 8 }}>
+                    <div>Total ({splitLines.filter((l) => l.amount > 0).length} subcategorías)</div>
+                    <strong>{splitTotal ? money(splitTotal, movForm.currency) : "—"}</strong>
+                  </div>
+                </div>
+              )}
               {selectedDebtForMov && movForm.category === "Deuda" && <InfoBox color="blue">Cuota sugerida: <strong>{fmtArs(selectedDebtForMov.installment)}</strong> · Saldo pendiente: <strong>{fmtArs(selectedDebtForMov.balance)}</strong>.</InfoBox>}
               {movForm.currency === "USD" && <InfoBox color="amber">Cotización blue del momento: <strong>{money(blueRate)}</strong> por USD · Importe en ARS: <strong>{money(toArs(movForm.originalAmount || 0, "USD", blueRate))}</strong></InfoBox>}
               {movForm.paymentMethod === "Tarjeta" && Number(movForm.installments) > 1 && movForm.originalAmount && movForm.shared && movForm.sharedPeople.length >= 2 && (() => {
@@ -2729,14 +2923,20 @@ export default function App() {
 
             <Card>
               <CardHead title="Series activas" icon="📋" />
-              {movementSeries.length === 0 && <EmptyState msg="No hay débitos automáticos ni compras en cuotas activas." />}
-              {movementSeries.map((s) => {
+              {seriesGroups.length === 0 && <EmptyState msg="No hay débitos automáticos ni compras en cuotas activas." />}
+              {seriesGroups.length > 0 && (
+                <div className="muted small" style={{ marginBottom: 4 }}>
+                  {selectedPerson === "all" ? "Cada compra compartida se muestra por su total." : `Mostrando la parte de ${selectedPerson}.`}
+                </div>
+              )}
+              {seriesGroups.map((group) => {
+                const s = group.rep;
                 const genMovs = movements.filter((m) => m.seriesId === s.id);
                 const pending = genMovs.filter((m) => m.date > today()).length;
                 return (
                   // Fila propia (no .budget-inline-row): ese layout reserva una columna angosta de
                   // 150px para el texto, que acá queda muy apretado con todo el detalle de la serie.
-                  <div key={s.id} style={{ display: "flex", gap: "2px 12px", alignItems: "center", flexWrap: "wrap", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+                  <div key={group.key} style={{ display: "flex", gap: "2px 12px", alignItems: "center", flexWrap: "wrap", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
                     {/* Título y detalle seguidos en el mismo bloque (se cortan en una segunda línea
                         solo si no entran); a la derecha, "hasta" + controles, todo compacto. */}
                     <div style={{ flex: "1 1 260px", minWidth: 0, lineHeight: 1.3 }}>
@@ -2745,14 +2945,14 @@ export default function App() {
                         {s.subcategory_id && subcategoryNameById[s.subcategory_id] ? ` · ${subcategoryNameById[s.subcategory_id]}` : ""}
                       </span>
                       <span className="muted small">
-                        {" · "}{s.person} · {money(s.installment_amount, s.currency)}{s.kind === "tarjeta_cuotas" ? ` · cuota ${Math.max(0, (s.installments_total || 0) - pending)}/${s.installments_total} · ${cardNameById[s.card_id] || "tarjeta"}` : ` · día ${s.day_of_month}`} · desde {s.start_date}
+                        {" · "}{group.persons.join(" + ")}{group.series.length > 1 ? " 🤝" : ""} · {money(group.amount, s.currency)}{s.kind === "tarjeta_cuotas" ? ` · cuota ${Math.max(0, (s.installments_total || 0) - pending)}/${s.installments_total} · ${cardNameById[s.card_id] || "tarjeta"}` : ` · día ${s.day_of_month}`} · desde {s.start_date}
                       </span>
                     </div>
                     <div style={{ display: "flex", gap: 6, alignItems: "center", flex: "0 0 auto" }}>
                       <span className="muted small">hasta</span>
-                      <input type="date" className="control" style={{ width: 136, padding: "3px 6px", fontSize: "0.82rem" }} value={seriesEndDateInputs[s.id] || s.end_date} onChange={(e) => setSeriesEndDateInputs((p) => ({ ...p, [s.id]: e.target.value }))} />
-                      <Btn small variant="outline" onClick={() => truncateSeries(s, seriesEndDateInputs[s.id] || s.end_date)}>Definir fin</Btn>
-                      <button className="del-btn" onClick={() => deleteSeries(s)}>🗑</button>
+                      <input type="date" className="control" style={{ width: 136, padding: "3px 6px", fontSize: "0.82rem" }} value={seriesEndDateInputs[group.key] || s.end_date} onChange={(e) => setSeriesEndDateInputs((p) => ({ ...p, [group.key]: e.target.value }))} />
+                      <Btn small variant="outline" onClick={() => truncateSeriesGroup(group, seriesEndDateInputs[group.key] || s.end_date)}>Definir fin</Btn>
+                      <button className="del-btn" onClick={() => deleteSeriesGroup(group)}>🗑</button>
                     </div>
                   </div>
                 );
@@ -2813,9 +3013,10 @@ export default function App() {
                 <>
                   <div className="muted small" style={{ margin: "10px 0 4px" }}>Movimientos del {isoToDmy(reconcilePeriod.start)} al {isoToDmy(reconcilePeriod.end)}</div>
                   {reconcileMovements.length === 0 && <EmptyState msg="No hay movimientos cargados con esta tarjeta en ese cierre." />}
-                  {reconcileMovements.map((m) => (
+                  {/* Siempre por total (como en el resumen del banco): una compra compartida es una sola línea. */}
+                  {groupForDisplay(reconcileMovements).map((m) => (
                     <div key={m.id} className="report-row">
-                      <div>{m.date} · {m.person} · {m.category}{m.description ? ` · ${m.description}` : ""}</div>
+                      <div>{m.date} · {m.person}{m.isGroup ? " 🤝" : ""} · {m.category}{m.description ? ` · ${m.description}` : ""}</div>
                       <strong>{m.currency === "USD" ? `U$S ${fmtArInput(m.originalAmount)}` : fmtArs(m.amountArs)}</strong>
                     </div>
                   ))}
@@ -3031,7 +3232,7 @@ export default function App() {
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <Btn onClick={exportCSV} variant="outline" small>⬇ Exportar movimientos</Btn>
               <Btn onClick={() => exportSection("desviaciones")} variant="outline" small>⬇ Exportar desviaciones</Btn>
-              <span className="muted small">{filteredMovements.length} registros</span>
+              <span className="muted small">{displayMovements.length} registros{displayMovements.length !== filteredMovements.length ? ` (${filteredMovements.length} movimientos; los compartidos se ven por su total)` : ""}</span>
             </div>
             {/* Mismo filtro que en el <thead> de la tabla de abajo, para cuando se ve como
                 tarjetas (mobile, donde toda la tabla -- encabezado incluido -- se oculta). */}
@@ -3081,7 +3282,7 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredMovements.map((m) => {
+                    {displayMovements.map((m) => {
                       const isEditing = editingMovId === m.id;
                       const isClosed = monthlyBalances.find((b) => b.balance_month === monthKey(m.date) && b.closed);
                       return (
@@ -3093,7 +3294,7 @@ export default function App() {
                               {m.sharedGroupId && (
                                 <span
                                   className="muted small"
-                                  title={`Compartido con ${movements.filter((x) => x.sharedGroupId === m.sharedGroupId && x.id !== m.id).map((x) => x.person).join(", ")}`}
+                                  title={m.isGroup ? `Total del gasto compartido entre ${m.person}` : `Compartido con ${movements.filter((x) => x.sharedGroupId === m.sharedGroupId && x.id !== m.id).map((x) => x.person).join(", ")}`}
                                   style={{ marginLeft: 4 }}
                                 >🤝</span>
                               )}
@@ -3112,7 +3313,7 @@ export default function App() {
                                     ? <button className="del-btn" onClick={() => setEditingMovId(null)}>✕</button>
                                     : <button className="del-btn" style={{ borderColor: "var(--primary)", color: "var(--primary)" }} onClick={() => startEditMovement(m)}>✏</button>
                                 )}
-                                {!isClosed && <button className="del-btn" onClick={() => deleteMovement(m.id)}>🗑</button>}
+                                {!isClosed && <button className="del-btn" onClick={() => (m.isGroup ? deleteMovementGroup(m.members) : deleteMovement(m.id))}>🗑</button>}
                                 {isClosed && <span className="muted small">🔒</span>}
                               </div>
                             </td>
@@ -3124,7 +3325,8 @@ export default function App() {
                                   data={editMovData} onChange={setEditMovData} types={types} categoryMap={categoryMap}
                                   subcategoryMap={subcategoryMap} categoryIdFor={categoryIdFor} people={people} cards={cards}
                                   onSave={() => saveEditMovement(m.id)} onCancel={() => setEditingMovId(null)}
-                                  groupMates={groupMatesOf(m).map((x) => x.person)} applyToGroup={editApplyToGroup} onApplyToGroupChange={setEditApplyToGroup}
+                                  groupMates={editGroupMode && m.isGroup ? [] : groupMatesOf(m).map((x) => x.person)} applyToGroup={editApplyToGroup} onApplyToGroupChange={setEditApplyToGroup}
+                                  groupMode={editGroupMode && m.isGroup} groupNames={m.members.map((x) => x.person)}
                                 />
                               </td>
                             </tr>
@@ -3138,7 +3340,7 @@ export default function App() {
               </div>
               {/* Mobile cards — visible below 780px via CSS */}
               <div className="cards-mobile">
-                {filteredMovements.map((m) => {
+                {displayMovements.map((m) => {
                   const isEditing = editingMovId === m.id;
                   const isClosed = monthlyBalances.find((b) => b.balance_month === monthKey(m.date) && b.closed);
                   return (
@@ -3155,7 +3357,7 @@ export default function App() {
                             ? <button className="del-btn" onClick={() => setEditingMovId(null)}>✕</button>
                             : <button className="del-btn" style={{ borderColor: "var(--primary)", color: "var(--primary)" }} onClick={() => startEditMovement(m)}>✏</button>
                           )}
-                          {!isClosed && <button className="del-btn" onClick={() => deleteMovement(m.id)}>🗑</button>}
+                          {!isClosed && <button className="del-btn" onClick={() => (m.isGroup ? deleteMovementGroup(m.members) : deleteMovement(m.id))}>🗑</button>}
                           {isClosed && <span className="muted small">🔒</span>}
                         </div>
                       </div>
@@ -3173,7 +3375,8 @@ export default function App() {
                           data={editMovData} onChange={setEditMovData} types={types} categoryMap={categoryMap}
                           subcategoryMap={subcategoryMap} categoryIdFor={categoryIdFor} people={people} cards={cards}
                           onSave={() => saveEditMovement(m.id)} onCancel={() => setEditingMovId(null)}
-                                  groupMates={groupMatesOf(m).map((x) => x.person)} applyToGroup={editApplyToGroup} onApplyToGroupChange={setEditApplyToGroup}
+                                  groupMates={editGroupMode && m.isGroup ? [] : groupMatesOf(m).map((x) => x.person)} applyToGroup={editApplyToGroup} onApplyToGroupChange={setEditApplyToGroup}
+                                  groupMode={editGroupMode && m.isGroup} groupNames={m.members.map((x) => x.person)}
                         />
                       )}
                     </div>
