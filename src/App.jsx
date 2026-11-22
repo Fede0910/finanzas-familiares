@@ -97,6 +97,11 @@ function mapMovementRow(m) {
 
 const daysInMonth = (year, month) => new Date(year, month, 0).getDate(); // month: 1-12
 
+// Clave del "gasto compartido" de un movimiento. En una compra en cuotas el shared_group_id es común a
+// TODAS las cuotas y personas, así que se agrega el número de cuota: el grupo es "esta cuota, de todas
+// las personas". Sin esto, editar/agrupar un gasto compartido pisaba las demás cuotas de la compra.
+const shareKey = (m) => (m.sharedGroupId ? `${m.sharedGroupId}|${m.installmentNo ?? ""}` : null);
+
 // Ajustes de saldo ("corrección del mes"): cuentan en el saldo pero no en los indicadores (resultado,
 // punto de equilibrio, gastos por categoría...), así una diferencia de caja no distorsiona el análisis.
 const CORRECTION_CATEGORIES = ["Ing. no regist.", "Egr. no regist."];
@@ -1229,7 +1234,7 @@ export default function App() {
   async function deleteMovement(id) {
     const mov = movements.find((m) => m.id === id);
     if (mov?.sharedGroupId) {
-      const groupMovs = movements.filter((m) => m.sharedGroupId === mov.sharedGroupId);
+      const groupMovs = movements.filter((m) => shareKey(m) === shareKey(mov));
       if (groupMovs.length > 1) {
         const deleteAll = window.confirm(`Este movimiento es parte de un gasto compartido entre ${groupMovs.map((m) => m.person).join(", ")}. ¿Borrar los ${groupMovs.length} movimientos del grupo? (Cancelar borra solo este)`);
         if (deleteAll) {
@@ -1618,7 +1623,7 @@ export default function App() {
   // Otros movimientos del mismo gasto compartido (misma compra, misma cuota), sin contar el propio.
   function groupMatesOf(m) {
     if (!m?.sharedGroupId) return [];
-    return movements.filter((x) => x.sharedGroupId === m.sharedGroupId && x.id !== m.id);
+    return movements.filter((x) => shareKey(x) === shareKey(m) && x.id !== m.id);
   }
 
   function startEditMovement(m) {
@@ -1639,7 +1644,7 @@ export default function App() {
   // moneda) se reparte en partes iguales entre las personas, como al cargarlo; si no, cada uno
   // conserva su parte. Los meses ya cerrados no se tocan.
   async function saveEditMovementGroup(mov) {
-    const members = shareGroups.get(mov.sharedGroupId) || [mov];
+    const members = shareGroups.get(shareKey(mov)) || [mov];
     const total = Number(editMovData.originalAmount);
     if (!total || !editMovData.type || !editMovData.category) return;
     const rate = editMovData.currency === "USD" ? (editMovData.currency !== mov.currency ? blueRate : mov.fxRate) : 1;
@@ -2162,9 +2167,17 @@ export default function App() {
   }, [availableMonths, statementFor]);
   const reconcileClosings = useMemo(() => closingsForCard(reconcileCard), [closingsForCard, reconcileCard]);
   const reconcilePeriod = useMemo(() => reconcileClosings.find((c) => c.key === reconcileForm.closing) || null, [reconcileClosings, reconcileForm.closing]);
-  const cardMovementsIn = useCallback((cardId, period) =>
-    movements.filter((m) => String(m.cardId) === String(cardId) && m.date >= period.start && m.date <= period.end),
-  [movements]);
+  // Movimientos de una tarjeta en un resumen. Las cuotas que genera la app caen en el día de cierre
+  // "nominal" del mes (el configurado en la tarjeta) y pertenecen a ESE resumen, aunque el banco haya
+  // cerrado unos días antes (ej. cierre real 29/10 con cuota fechada el 30/10); el resto va por fecha.
+  const cardMovementsIn = useCallback((cardId, period) => {
+    const cd = cards.find((c) => String(c.id) === String(cardId))?.closing_day;
+    return movements.filter((m) => {
+      if (String(m.cardId) !== String(cardId)) return false;
+      if (m.installmentNo && cd && m.date === closingDateOf(monthKey(m.date), cd)) return m.date === period.key;
+      return m.date >= period.start && m.date <= period.end;
+    });
+  }, [movements, cards]);
   const reconcileMovements = useMemo(() => {
     if (!reconcileCard || !reconcilePeriod) return [];
     return cardMovementsIn(reconcileCard.id, reconcilePeriod).sort((a, b) => a.date.localeCompare(b.date));
@@ -2489,9 +2502,10 @@ export default function App() {
   const shareGroups = useMemo(() => {
     const map = new Map();
     movements.forEach((m) => {
-      if (!m.sharedGroupId) return;
-      if (!map.has(m.sharedGroupId)) map.set(m.sharedGroupId, []);
-      map.get(m.sharedGroupId).push(m);
+      const k = shareKey(m);
+      if (!k) return;
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(m);
     });
     map.forEach((list) => list.sort((a, b) => a.id - b.id));
     return map;
@@ -2500,10 +2514,11 @@ export default function App() {
     const seen = new Set();
     const out = [];
     list.forEach((m) => {
-      const members = m.sharedGroupId ? shareGroups.get(m.sharedGroupId) : null;
+      const k = shareKey(m);
+      const members = k ? shareGroups.get(k) : null;
       if (!members || members.length < 2) { out.push({ ...m, members: [m], isGroup: false }); return; }
-      if (seen.has(m.sharedGroupId)) return;
-      seen.add(m.sharedGroupId);
+      if (seen.has(k)) return;
+      seen.add(k);
       const sum = (key) => Math.round(members.reduce((a, x) => a + Number(x[key] || 0), 0) * 100) / 100;
       out.push({
         ...members[0], members, isGroup: true, person: members.map((x) => x.person).join(" + "),
@@ -3294,7 +3309,7 @@ export default function App() {
                               {m.sharedGroupId && (
                                 <span
                                   className="muted small"
-                                  title={m.isGroup ? `Total del gasto compartido entre ${m.person}` : `Compartido con ${movements.filter((x) => x.sharedGroupId === m.sharedGroupId && x.id !== m.id).map((x) => x.person).join(", ")}`}
+                                  title={m.isGroup ? `Total del gasto compartido entre ${m.person}` : `Compartido con ${groupMatesOf(m).map((x) => x.person).join(", ")}`}
                                   style={{ marginLeft: 4 }}
                                 >🤝</span>
                               )}
