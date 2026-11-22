@@ -884,6 +884,7 @@ export default function App() {
   const [subcategoryRows, setSubcategoryRows] = useState([]); // { id, category_id, name, active }
   const [cards, setCards] = useState([]); // { id, name, owner, active }
   const [movementSeries, setMovementSeries] = useState([]); // { id, kind, ... } débito automático + cuotas de tarjeta
+  const [endedSeries, setEndedSeries] = useState([]); // series dadas de baja (active = false), para dejar constancia de qué ya no se paga
 
   const [movements, setMovements] = useState([]);
   const [debts, setDebts] = useState([]);
@@ -968,7 +969,7 @@ export default function App() {
     async function load() {
       setLoading(true);
       try {
-        const [movsR, dbsR, dpsR, glsR, bgsR, mbsR, catsR, categoriesR, subcatsR, cardsR, seriesR, loansR, loanPaysR, cardStmtsR] = await Promise.all([
+        const [movsR, dbsR, dpsR, glsR, bgsR, mbsR, catsR, categoriesR, subcatsR, cardsR, seriesR, loansR, loanPaysR, cardStmtsR, endedSeriesR] = await Promise.all([
           fetchAllRows(() => supabase.from("movements").select("*").order("movement_date", { ascending: false }).order("id", { ascending: false })),
           supabase.from("debts").select("*").order("created_at", { ascending: false }),
           supabase.from("debt_payments").select("*").order("payment_date", { ascending: false }),
@@ -983,6 +984,7 @@ export default function App() {
           supabase.from("loans").select("*").order("created_at", { ascending: false }),
           supabase.from("loan_payments").select("*").order("payment_date", { ascending: false }),
           supabase.from("card_statements").select("*"),
+          supabase.from("movement_series").select("*").eq("active", false).order("id", { ascending: false }),
         ]);
 
         const movs = movsR.data || [];
@@ -1004,6 +1006,7 @@ export default function App() {
         setCards(cardsData);
         setCardStatements(cardStmtsR.data || []);
         setMovementSeries(seriesData);
+        setEndedSeries(endedSeriesR.data || []);
         setLoans(loansData.map((l) => ({
           id: l.id, name: l.name, owner: l.owner, principal: l.principal, annualRate: l.annual_rate,
           startDate: l.start_date, dayOfMonth: l.day_of_month, graceMonths: l.grace_months,
@@ -1442,8 +1445,9 @@ export default function App() {
   async function deleteSeries(series, skipConfirm = false) {
     if (!skipConfirm && !window.confirm("¿Eliminar esta serie? Se borran los movimientos futuros generados (no los que ya pasaron ni los de meses cerrados).")) return;
     await truncateSeries(series, today());
-    await supabase.from("movement_series").update({ active: false }).eq("id", series.id);
+    await supabase.from("movement_series").update({ active: false, end_date: today() }).eq("id", series.id);
     setMovementSeries((prev) => prev.filter((s) => s.id !== series.id));
+    setEndedSeries((prev) => [{ ...series, active: false, end_date: today() }, ...prev]);
   }
 
   // Una serie compartida son varias series (una por persona): se cortan/borran todas juntas.
@@ -2955,12 +2959,14 @@ export default function App() {
                     {/* Título y detalle seguidos en el mismo bloque (se cortan en una segunda línea
                         solo si no entran); a la derecha, "hasta" + controles, todo compacto. */}
                     <div style={{ flex: "1 1 260px", minWidth: 0, lineHeight: 1.3 }}>
+                      {/* Primero QUÉ es (el detalle: Netflix, Crunchyroll, zapas...); si la serie no tiene
+                          detalle se cae a la categoría. Después categoría/subcategoría y el resto. */}
                       <span className="fw" style={{ fontSize: "0.9rem" }}>
-                        {s.kind === "tarjeta_cuotas" ? "💳" : "🔁"} {s.category}
-                        {s.subcategory_id && subcategoryNameById[s.subcategory_id] ? ` · ${subcategoryNameById[s.subcategory_id]}` : ""}
+                        {s.kind === "tarjeta_cuotas" ? "💳" : "🔁"} {group.series.map((x) => (x.description || "").trim()).find(Boolean) || s.category}
                       </span>
                       <span className="muted small">
-                        {" · "}{group.persons.join(" + ")}{group.series.length > 1 ? " 🤝" : ""} · {money(group.amount, s.currency)}{s.kind === "tarjeta_cuotas" ? ` · cuota ${Math.max(0, (s.installments_total || 0) - pending)}/${s.installments_total} · ${cardNameById[s.card_id] || "tarjeta"}` : ` · día ${s.day_of_month}`} · desde {s.start_date}
+                        {group.series.some((x) => (x.description || "").trim()) ? ` · ${s.category}` : ""}{s.subcategory_id && subcategoryNameById[s.subcategory_id] ? ` · ${subcategoryNameById[s.subcategory_id]}` : ""}
+                        {" · "}{group.persons.join(" + ")}{group.series.length > 1 ? " 🤝" : ""} · {money(group.amount, s.currency)}{s.kind === "tarjeta_cuotas" ? ` · cuota ${Math.max(0, (s.installments_total || 0) - pending)}/${s.installments_total} · ${cardNameById[s.card_id] || "tarjeta"}` : ` · día ${s.day_of_month}${s.card_id ? ` · ${cardNameById[s.card_id] || "tarjeta"}` : ""}`} · desde {s.start_date}
                       </span>
                     </div>
                     <div style={{ display: "flex", gap: 6, alignItems: "center", flex: "0 0 auto" }}>
@@ -2973,6 +2979,30 @@ export default function App() {
                 );
               })}
             </Card>
+
+            {/* Lo que ya no se paga: queda a la vista (con su último cobro) para no preguntarse si sigue activo. */}
+            {endedSeries.filter((s) => selectedPerson === "all" || s.person === selectedPerson).length > 0 && (
+              <Card>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none" }} onClick={() => setExpandedTypes((p) => ({ ...p, _seriesBaja: !p._seriesBaja }))}>
+                  <CardHead title="Dadas de baja" icon="🚫" />
+                  <span className="muted small" style={{ paddingRight: 4 }}>{endedSeries.filter((s) => selectedPerson === "all" || s.person === selectedPerson).length} · {expandedTypes._seriesBaja ? "▲ ocultar" : "▼ ver"}</span>
+                </div>
+                {expandedTypes._seriesBaja && endedSeries.filter((s) => selectedPerson === "all" || s.person === selectedPerson).map((s) => {
+                  const charges = movements.filter((m) => m.seriesId === s.id).sort((a, b) => a.date.localeCompare(b.date));
+                  const paid = charges.filter((m) => m.date <= today());
+                  const last = paid[paid.length - 1];
+                  return (
+                    <div key={s.id} style={{ padding: "6px 0", borderBottom: "1px solid var(--border)", lineHeight: 1.3 }}>
+                      <span className="fw" style={{ fontSize: "0.9rem" }}>{(s.description || "").trim() || s.category}</span>
+                      <span className="muted small">
+                        {" · "}{s.category}{s.subcategory_id && subcategoryNameById[s.subcategory_id] ? ` · ${subcategoryNameById[s.subcategory_id]}` : ""} · {s.person}
+                        {" · "}{paid.length} {paid.length === 1 ? "cobro" : "cobros"}{last ? ` · último ${isoToDmy(last.date)}` : ""}{s.card_id ? ` · ${cardNameById[s.card_id] || "tarjeta"}` : ""} · <strong>dado de baja</strong>
+                      </span>
+                    </div>
+                  );
+                })}
+              </Card>
+            )}
 
             <Card>
               <CardHead title="Conciliación de resumen de tarjeta" icon="🧾" />
